@@ -1,0 +1,18 @@
+# Web framework stack
+Flask==3.1.1           # Web framework (routes, sessions)
+Werkzeug==3.1.3        # WSGI toolkit Flask builds on
+Jinja2==3.1.4          # HTML templating engine
+itsdangerous==2.2.0    # Signed cookies / token helpers
+click==8.1.7           # CLI utilities used by Flask
+blinker==1.9.0         # Signal/event support for Flask
+MarkupSafe==2.1.5      # Safe string escaping for Jinja2
+
+# Production server
+gunicorn==23.0.0       # WSGI HTTP server for deployment
+
+# Parsing & locale
+pytz==2025.2           # Time zone database/utilities
+dateparser==1.2.0      # Parse “Aug 24 2pm”, “tomorrow”, etc.
+geotext==0.4.0         # Extract place names from free text
+pycountry==24.6.1      # ISO country/region names & codes
+python-dotenv==1.0.1   # Environment variable loader

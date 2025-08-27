@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Scheduled</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      margin: 2em;
+    }
+    .header-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 1em;
+    }
+    .logout-form {
+      display: inline;
+      margin-left: 1em;
+    }
+    .event-row {
+      display: flex;
+      justify-content: flex-start;
+      gap: 1em;
+    }
+    .time-col {
+      width: 100px;
+      text-align: right;
+      font-weight: bold;
+    }
+    .activity-col {
+      flex: 1;
+    }
+    .add-event {
+      margin: 2em 0;
+    }
+  </style>
+</head>
+<body>
+  <h2>1. 📧 Email Address</h2>
+
+  {% if not user %}
+    <form method="POST">
+      <input type="email" name="email" required>
+      <input type="text" name="timezone" value="Asia/Calcutta" hidden>
+      <button type="submit">Submit</button>
+    </form>
+  {% else %}
+    <div class="header-row">
+      <div><strong>{{ user }}</strong></div>
+      <div>
+        <strong>📅 {{ now }}</strong>
+        <form method="POST" action="/logout" class="logout-form">
+          <button type="submit">🚪 Logout</button>
+        </form>
+      </div>
+    </div>
+
+    <div class="add-event">
+      <form method="POST">
+        <input type="text" name="add" placeholder="Add Event, Date, Goal" required>
+        <button type="submit">Add</button>
+      </form>
+    </div>
+  {% endif %}
+
+  <h2>3. 🕒 Events</h2>
+  {% if events %}
+    <ul>
+      {% for time, activity in events %}
+        <li class="event-row">
+          <div class="time-col">{{ time }}</div>
+          <div class="activity-col">{{ activity }}</div>
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p><i>No events yet</i></p>
+  {% endif %}
+
+  <h2>4. 📌 Dates</h2>
+  {% if dates %}
+    <ul>
+      {% for date in dates %}
+        <li>{{ date }}</li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <ul><li><i>No important dates yet</i></li></ul>
+  {% endif %}
+
+  <h2>5. 🎯 Goals</h2>
+  {% if goals %}
+    <ul>
+      {% for goal in goals %}
+        <li>{{ goal }}</li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <ul><li><i>No goals yet</i></li></ul>
+  {% endif %}
+
+  <h2>6. 📁 Other</h2>
+  {% if others %}
+    <ul>
+      {% for other in others %}
+        <li>{{ other }}</li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <ul><li><i>Nothing uncategorized</i></li></ul>
+  {% endif %}
+</body>
+</html>
