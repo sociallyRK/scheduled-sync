@@ -5,3 +5,4 @@ __pycache__/
 .DS_Store
 scheduled_data/*.txt
 users.json
+previous/scheduled_test/scheduled/scheduled
