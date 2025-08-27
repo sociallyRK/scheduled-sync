@@ -1,0 +1,1 @@
+SETTINGS:{"travel_enabled": false, "time_format": "12h"}
