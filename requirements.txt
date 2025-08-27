@@ -16,3 +16,6 @@ dateparser==1.2.0      # Parse “Aug 24 2pm”, “tomorrow”, etc.
 geotext==0.4.0         # Extract place names from free text
 pycountry==24.6.1      # ISO country/region names & codes
 python-dotenv==1.0.1   # Environment variable loader
+google-api-python-client
+google-auth-httplib2
+google-auth-oauthlib
