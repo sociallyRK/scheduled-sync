@@ -1,111 +1,81 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>Scheduled</title>
-<style>
-  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:0;background:#f7f7f8}
-  header{padding:12px 16px;background:#111;color:#fff;display:flex;justify-content:space-between;align-items:center}
-  .grid{display:grid;gap:16px;padding:16px;grid-template-columns:2fr 1fr 1fr} /* 3 columns */
-  .card{background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:14px;box-shadow:0 1px 2px rgba(0,0,0,.05)}
-  h2{margin:.2rem 0 .6rem 0;font-size:1.1rem}
-  form.inline{display:flex;gap:8px}
-  input[type=text],input[type=password]{padding:10px;border:1px solid #d1d5db;border-radius:10px;background:#fafafa}
-  input[type=text]{flex:1}
-  input::placeholder{color:#9ca3af}
-  button{padding:9px 12px;border:1px solid #111;background:#111;color:#fff;border-radius:10px;cursor:pointer}
-  ul{margin:.25rem 0 0 1rem;padding:0}
-  li{margin:.2rem 0}
-  .muted{color:#6b7280;font-size:.9rem}
-  .stack{display:flex;flex-direction:column;gap:8px}
-  .to-bold b{font-weight:700}
-</style>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Scheduled — Sync</title>
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:22px;line-height:1.35}
+    header{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}
+    h1{font-size:20px;margin:0}
+    .muted{color:#666;font-size:13px}
+    .row{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:14px}
+    .card{border:1px solid #eee;border-radius:12px;padding:12px;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.04)}
+    ul{margin:8px 0 0 18px}
+    li{margin:4px 0}
+    input,button{padding:8px;border:1px solid #ddd;border-radius:10px}
+    form.inline{display:inline}
+    .bar button{margin-right:8px}
+  </style>
 </head>
 <body>
 <header>
-  <strong>Scheduled</strong>
-  <div class="muted">Single page • Port 5000 / Render</div>
+  <h1>Scheduled — Sync</h1>
+  <div class="bar">
+    {% if email %}
+      <form class="inline" method="post" action="/logout"><button>Logout</button></form>
+      <a href="/auth/google"><button>Connect Google</button></a>
+      <form class="inline" method="post" action="/import_google"><button>Import from Google (Today)</button></form>
+      <form class="inline" method="post" action="/export_google"><button>Export to Google (Today)</button></form>
+      <a href="/logout_google"><button>Disconnect Google</button></a>
+    {% endif %}
+  </div>
 </header>
 
-<div class="grid">
-  <!-- Column 1: Schedule + Add -->
-  <section class="card">
-    <h2>Events (Schedule)</h2>
-    {% if email %}
-      <form class="inline" method="post" action="/add">
-        <input name="add" type="text" placeholder="8 AM Breakfast, Dec 31 New Years Eve"/>
-        <button type="submit">Add</button>
-      </form>
-      <ul>
-        {% for s in schedule %}<li>{{ s }}</li>{% endfor %}
-      </ul>
-    {% else %}
-      <div class="muted">Login to add/view your schedule.</div>
-    {% endif %}
-  </section>
+<p class="muted">Now: {{ now_ist }}</p>
 
-  <!-- Column 2: Dates + Other -->
-  <section class="card">
-    <h2>Dates + Other</h2>
-    {% if email %}
-      <div class="stack">
-        <div>
-          <div class="muted">Dates</div>
-          <ul>{% for d in dates %}<li>{{ d }}</li>{% endfor %}</ul>
-        </div>
-        <div>
-          <div class="muted">Other</div>
-          <ul>
-            {% for o in other %}
-              {% if o.lower().startswith('to ') %}
-                <li class="to-bold"><b>To</b>{{ o[2:] }}</li>
-              {% elif o.lower().startswith('goal:') %}
-                <li><b>Goal:</b> {{ o[5:].strip() }}</li>
-              {% else %}
-                <li>{{ o }}</li>
-              {% endif %}
-            {% endfor %}
-          </ul>
-        </div>
-      </div>
-    {% else %}
-      <div class="muted">Login to view your items.</div>
-    {% endif %}
-  </section>
+{% if not email %}
+  <form method="post" action="/login">
+    <input name="email" placeholder="email" required>
+    <input type="password" name="password" placeholder="password" required>
+    <button>Login / Create</button>
+  </form>
+{% else %}
+  <!-- Input + Settings -->
+  <form method="post" action="/add" style="margin:10px 0">
+    <input name="add" style="min-width:360px" placeholder="Add Event, Date, Goal">
+    <button>Add</button>
+  </form>
+  <form class="inline" method="post" action="/toggle_travel">
+    <button>{{ 'Disable' if travel_enabled else 'Enable' }} Travel Schedule</button>
+  </form>
+  <form class="inline" method="post" action="/reset">
+    <button>Reset</button>
+  </form>
 
-  <!-- Column 3: Login + Settings -->
-  <section class="card">
-    <h2>Login & Settings</h2>
+  <!-- Sections -->
+  <div class="row" style="margin-top:12px">
+    <section class="card">
+      <h3>1. Goals</h3>
+      {% if other %}<ul>{% for o in other %}<li>{{ o }}</li>{% endfor %}</ul>{% else %}<p class="muted">None</p>{% endif %}
+    </section>
 
-    {% if not email %}
-      <form class="stack" method="post" action="/login">
-        <input type="text" name="email" placeholder="you@example.com"/>
-        <input type="password" name="password" placeholder="Password"/>
-        <button type="submit">Login / Create</button>
-      </form>
-    {% else %}
-      <div class="muted">Signed in as <strong>{{ email }}</strong></div>
-      <form method="post" action="/logout" style="margin-top:8px">
-        <button type="submit">Log out</button>
-      </form>
+    <section class="card">
+      <h3>2. Dates</h3>
+      {% if dates %}<ul>{% for d in dates %}<li>{{ d }}</li>{% endfor %}</ul>{% else %}<p class="muted">None</p>{% endif %}
+    </section>
 
-      <hr style="margin:12px 0"/>
-      <div class="muted" style="margin-bottom:6px">Time format: 12-hour (AM/PM)</div>
+    <section class="card">
+      <h3>3. Time</h3>
+      {% if schedule %}<ul>{% for s in schedule %}<li>{{ s }}</li>{% endfor %}</ul>{% else %}<p class="muted">None</p>{% endif %}
+    </section>
 
-      <form method="post" action="/toggle_travel">
-        <button type="submit">{{ 'Disable' if travel_enabled else 'Enable' }} Travel Schedule</button>
-      </form>
-
-      {% if travel_enabled %}
-        <p class="muted" style="margin-top:10px">Travel Schedule (shown here under Settings):</p>
-        <ul>{% for t in travel %}<li>{{ t }}</li>{% endfor %}</ul>
-      {% endif %}
-
-      <form method="post" action="/reset" style="margin-top:12px">
-        <button type="submit">Reset to Empty</button>
-      </form>
-    {% endif %}
-  </section>
-</div>
+    <section class="card">
+      <h3>4. Travel</h3>
+      {% if travel_enabled and travel %}<ul>{% for t in travel %}<li>{{ t }}</li>{% endfor %}</ul>
+      {% else %}<p class="muted">Hidden or empty</p>{% endif %}
+    </section>
+  </div>
+{% endif %}
 </body>
 </html>

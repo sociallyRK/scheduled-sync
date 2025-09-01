@@ -1,3 +1,4 @@
+SETTINGS:{"travel_enabled": true, "time_format": "12h"}
 05:00 AM Wake Up
 05:01 AM Promote App / Find Investors
 05:45 AM Brush Teeth
@@ -35,3 +36,4 @@ Allocate Additional Funds for Living at Leela
 Improve Collaboration
 Improve Non-Verbal Communication Skills
 Raise Capital
+Dec 31 New Delhi

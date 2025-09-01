@@ -1,0 +1,120 @@
+cat > index.html <<'EOF'
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Scheduled</title>
+<style>
+  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:0;background:#f7f7f8}
+  header{padding:12px 16px;background:#111;color:#fff;display:flex;justify-content:space-between;align-items:center}
+  .grid{display:grid;gap:16px;padding:16px;grid-template-columns:2fr 1fr 1fr}
+  .card{background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:14px;box-shadow:0 1px 2px rgba(0,0,0,.05)}
+  h2{margin:.2rem 0 .6rem 0;font-size:1.1rem}
+  form.inline{display:flex;gap:8px}
+  input[type=text],input[type=password]{padding:10px;border:1px solid #d1d5db;border-radius:10px;background:#fafafa}
+  input[type=text]{flex:1}
+  input::placeholder{color:#9ca3af}
+  button{padding:9px 12px;border:1px solid #111;background:#111;color:#fff;border-radius:10px;cursor:pointer}
+  ul{margin:.25rem 0 0 1rem;padding:0}
+  li{margin:.2rem 0}
+  .muted{color:#6b7280;font-size:.9rem}
+  .stack{display:flex;flex-direction:column;gap:8px}
+  .to-bold b{font-weight:700}
+</style>
+</head>
+<body>
+<header>
+  <strong>Scheduled</strong>
+  <div class="muted">Single page • Port 5000 / Render</div>
+</header>
+
+<div class="grid">
+  <!-- Column 1: Schedule + Add -->
+  <section class="card">
+    <h2>Events (Schedule)</h2>
+    {% if email %}
+      <form class="inline" method="post" action="/add">
+        <input name="add" type="text" placeholder="8 AM Breakfast, Dec 31 New Years Eve"/>
+        <button type="submit">Add</button>
+      </form>
+      <ul>
+        {% for s in schedule %}<li>{{ s }}</li>{% endfor %}
+      </ul>
+    {% else %}
+      <div class="muted">Login to add/view your schedule.</div>
+    {% endif %}
+  </section>
+
+  <!-- Column 2: Dates + Other -->
+  <section class="card">
+    <h2>Dates + Other</h2>
+    {% if email %}
+      <div class="stack">
+        <div>
+          <div class="muted">Dates</div>
+          <ul>{% for d in dates %}<li>{{ d }}</li>{% endfor %}</ul>
+        </div>
+        <div>
+          <div class="muted">Other</div>
+          <ul>
+            {% for o in other %}
+              {% if o.lower().startswith('to ') %}
+                <li class="to-bold"><b>To</b>{{ o[2:] }}</li>
+              {% elif o.lower().startswith('goal:') %}
+                <li><b>Goal:</b> {{ o[5:].strip() }}</li>
+              {% else %}
+                <li>{{ o }}</li>
+              {% endif %}
+            {% endfor %}
+          </ul>
+        </div>
+      </div>
+    {% else %}
+      <div class="muted">Login to view your items.</div>
+    {% endif %}
+  </section>
+
+  <!-- Column 3: Login + Settings -->
+  <section class="card">
+    <h2>Login & Settings</h2>
+
+    {% if not email %}
+      <form class="stack" method="post" action="/login">
+        <input type="text" name="email" placeholder="you@example.com"/>
+        <input type="password" name="password" placeholder="Password"/>
+        <button type="submit">Login / Create</button>
+      </form>
+    {% else %}
+      <div class="muted">Signed in as <strong>{{ email }}</strong></div>
+      <form method="post" action="/logout" style="margin-top:8px">
+        <button type="submit">Log out</button>
+      </form>
+
+      <hr style="margin:12px 0"/>
+      <!-- Google Connect -->
+      {% if session.get("g_creds") %}
+        <p>✅ Google connected</p>
+        <a href="{{ url_for('logout') }}">Disconnect</a>
+      {% else %}
+        <a href="{{ url_for('auth_google') }}">Connect Google</a>
+      {% endif %}
+
+      <div class="muted" style="margin:12px 0 6px">Time format: 12-hour (AM/PM)</div>
+
+      <form method="post" action="/toggle_travel">
+        <button type="submit">{{ 'Disable' if travel_enabled else 'Enable' }} Travel Schedule</button>
+      </form>
+
+      {% if travel_enabled %}
+        <p class="muted" style="margin-top:10px">Travel Schedule (shown here under Settings):</p>
+        <ul>{% for t in travel %}<li>{{ t }}</li>{% endfor %}</ul>
+      {% endif %}
+
+      <form method="post" action="/reset" style="margin-top:12px">
+        <button type="submit">Reset to Empty</button>
+      </form>
+    {% endif %}
+  </section>
+</div>
+</body>
+</html>
