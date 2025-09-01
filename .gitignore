@@ -4,3 +4,4 @@ __pycache__/
 client_secret.json
 users.json
 scheduled_data/
+.env
