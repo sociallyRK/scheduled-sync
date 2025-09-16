@@ -209,8 +209,8 @@ app.register_blueprint(gcal_bp)
 from flask import redirect, url_for
 @app.route("/auth/google")
 def auth_google_alias():
-    return redirect(url_for("gcal.login"))
+    return redirect("/gcal/login")
 
 @app.route("/auth/google/callback")
 def auth_google_callback_alias():
-    return redirect(url_for("gcal.callback"))
+    return redirect("/gcal/callback")
