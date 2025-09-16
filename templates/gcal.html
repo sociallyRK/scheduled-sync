@@ -1,0 +1,36 @@
+<!doctype html><meta charset="utf-8">
+<title>Google Calendar</title>
+<style>body{font:14px system-ui,sans-serif;margin:24px}.btn{padding:8px 12px;border:1px solid #ccc;border-radius:10px;text-decoration:none}.card{border:1px solid #eee;border-radius:12px;padding:12px;margin:10px 0}.row{display:flex;gap:8px;align-items:center}input,button{padding:8px;border-radius:8px;border:1px solid #ddd}</style>
+<h2>Google Calendar</h2>
+{% if banner %}<div class="card"><b>Note:</b> {{ banner }}</div>{% endif %}
+{% if authed %}
+  <div class="row"><a class="btn" href="/gcal/logout">Disconnect</a></div>
+  <h3>Create Event</h3>
+  <div class="card">
+    <div class="row">
+      <input id="summary" placeholder="Summary" value="Scheduled Event">
+      <input id="start" placeholder="Start ISO (YYYY-MM-DDTHH:MM:SS)">
+      <input id="end" placeholder="End ISO (YYYY-MM-DDTHH:MM:SS)">
+      <button onclick="createEv()">Create</button>
+    </div>
+    <small>Timezone defaults to Asia/Kolkata.</small>
+  </div>
+  <h3>Upcoming (next 10)</h3>
+  {% for e in events %}
+    <div class="card">
+      <b>{{ e.get('summary','(no title)') }}</b><br>
+      {{ e.get('start',{}).get('dateTime') or e.get('start',{}).get('date') }} →
+      {{ e.get('end',{}).get('dateTime') or e.get('end',{}).get('date') }}
+      {% if e.get('htmlLink') %}<div><a href="{{ e['htmlLink'] }}" target="_blank">Open</a></div>{% endif %}
+    </div>
+  {% endfor %}
+{% else %}
+  <a class="btn" href="/gcal/login">Connect Google</a>
+{% endif %}
+<script>
+async function createEv(){
+  const r = await fetch("/gcal/create",{method:"POST",headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({summary:summary.value,start_iso:start.value,end_iso:end.value})});
+  if(r.ok) location.reload(); else alert("Failed");
+}
+</script>
