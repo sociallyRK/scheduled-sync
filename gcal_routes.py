@@ -9,7 +9,7 @@ def _current_user_email():
 @gcal_bp.route("/login")
 def login():
     flow = start_flow()
-    auth_url, state = flow.authorization_url(access_type="offline", include_granted_scopes=True, prompt="consent")
+    auth_url, state = flow.authorization_url(access_type="offline", include_granted_scopes="true", prompt="consent")
     session["gcal_state"] = state
     return redirect(auth_url)
 
