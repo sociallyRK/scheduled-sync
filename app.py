@@ -35,10 +35,10 @@ app.config.update(
 )
 
 # ----- Regex helpers ----------------------------------------------------------
-# Dates anywhere like "Meet mom on Sep 21" (month abbrev + day)
-DATE_ANY_RE = re.compile(r"(?:\b(" + "|".join(MONTHS) + r")\.?\s+(\d{1,2})\b)", re.I)
 MONTHS = "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split()
-DATE_PREFIX_RE = re.compile(r"^\s*(?:(" + "|".join(MONTHS) + r")\.?)\s+(\d{1,2})\b", re.I)
+# Dates anywhere like "Meet mom on Sep 21" (month abbrev + day)
+DATE_ANY_RE   = re.compile(r"(?:\b(" + "|".join(MONTHS) + r")\.?\s+(\d{1,2})\b)", re.I)
+DATE_PREFIX_RE= re.compile(r"^\s*(?:(" + "|".join(MONTHS) + r")\.?)\s+(\d{1,2})\b", re.I)
 TIME_ANY_RE   = re.compile(r"\b(\d{1,2})(?::(\d{2}))?\s*(AM|PM)\b", re.I)
 TIME_START_RE = re.compile(r"^\s*(\d{1,2})(?::(\d{2}))?\s*(AM|PM)\b", re.I)
 GOAL_RE       = re.compile(r"^\s*(Goal:|To\s)\b", re.I)
@@ -323,10 +323,15 @@ def gcal_export_today():
     import pytz
 
     email = session.get("email")
-    if not email: return jsonify({"error":"not logged in"}), 401
+    if not email: 
+        return jsonify({"error":"not logged in"}), 401
+
+    # chunk size (default 20), cap 200
+    limit = min(int(request.args.get("limit", 20)), 200)
 
     settings, lines = read_user_blob(email)
     schedule, _, _, _ = classify(lines)
+    schedule = schedule[:limit]
 
     tz = pytz.timezone("Asia/Kolkata")
     today = tz.localize(datetime.now().replace(hour=0, minute=0, second=0, microsecond=0))
@@ -335,7 +340,7 @@ def gcal_export_today():
 
     svc = build_service()
 
-    # existing events today (for dedupe): (start_local_minute, summary_lower)
+    # dedupe from existing google events (same time+summary today)
     existing = set()
     existing_resp = svc.events().list(
         calendarId="primary", singleEvents=True, orderBy="startTime",
@@ -343,16 +348,16 @@ def gcal_export_today():
     ).execute()
     for ev in existing_resp.get("items", []):
         start = ev.get("start", {})
-        summary = (ev.get("summary") or "").strip().lower()
         if "dateTime" in start:
-            dt = datetime.fromisoformat(start["dateTime"].replace("Z", "+00:00")).astimezone(tz)
-            key = (dt.replace(second=0, microsecond=0), summary)
+            dt = datetime.fromisoformat(start["dateTime"].replace("Z","+00:00")).astimezone(tz)
+            key = (dt.replace(second=0, microsecond=0), (ev.get("summary") or "").strip().lower())
             existing.add(key)
 
     created = []
-    for s in schedule[:200]:
+    for s in schedule:
         tt = parse_time_tuple(s)
-        if not tt: continue
+        if not tt: 
+            continue
         h, m = tt
         start_local = today.replace(hour=h, minute=m, second=0, microsecond=0)
         end_local   = start_local + timedelta(minutes=10)
@@ -370,8 +375,11 @@ def gcal_export_today():
         created.append(svc.events().insert(calendarId="primary", body=ev).execute())
         existing.add(key)
 
-    return jsonify({"created": [e.get("htmlLink") for e in created], "count": len(created)})
-
+    # If called from UI (button or #export today), flash + redirect
+    if request.args.get("ui") == "1":
+        flash(f"Exported {len(created)} time events to Google (limit {limit}).")
+        return redirect(url_for("index"))
+    return jsonify({"count": len(created), "created": [e.get("htmlLink") for e in created], "limit": limit})
 # Export "dates" (and travel) → all-day events, tagged
 @app.post("/gcal/export_dates")
 @require_gcal
