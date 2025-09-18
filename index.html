@@ -34,6 +34,8 @@
       <form class="inline" method="post" action="/gcal/export_today"><button>Export Today → Google</button></form>
       <form class="inline" method="post" action="/gcal/export_dates"><button>Export Dates → Google</button></form>
       <form class="inline" method="post" action="/gcal/import_today_to_app"> <button>Import Today → App</button></form>
+      <form class="inline" method="post" action="/gcal/import_today_to_app">
+      <button>Import Today → App</button></form>
       <a href="/logout"><button>Disconnect Google</button></a>
       {% if session_has_gcal %}
         <span class="status">Google Connected ✅</span>
