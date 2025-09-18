@@ -1,0 +1,6 @@
+-r requirements.txt       # Include base requirements
+
+# --- Dev / QA tools ---
+black==24.8.0             # Code formatter
+ruff==0.5.0               # Linter
+pytest==8.3.2             # Unit testing framework

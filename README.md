@@ -5,80 +5,74 @@ A fast, minimal daily OS. Add entries in natural text; the app classifies and di
 ---
 
 ## Core Sections
-1. **Events** — time-based (e.g., `07:00 AM Yoga`, `tomorrow 2pm call mom`)
-2. **Dates (Milestones)** — date-prefixed (e.g., `Aug 18 Finish presentation`)
-3. **Travel Schedule 🚆** *(optional)* — **date + location** (e.g., `Aug 18 London`, `Sept 21 to Shirdi`)
-4. **Goals** — imperative statements (e.g., `Goal: Improve Collaboration`, `To Eat Healthier`)
+1. **Events** — time-based (`07:00 AM Yoga`, `tomorrow 2pm call mom`)
+2. **Dates** — date-prefixed (`Aug 18 Finish presentation`)
+3. **Travel 🚆** *(optional)* — date + location (`Aug 18 London`)
+4. **Goals** — imperative (`Goal: Improve Collaboration`)
 5. **Other** — everything else
 
 ---
 
-## Input Rules (Classifier)
-- **Events**: starts with `H:MM/HH:MM AM/PM`, **or** contains a recognizable time phrase (via `dateparser`).
-- **Dates**: starts with `Mon DD` (month short name).
-- **Travel**: a **Date** line that also contains a detected **city/country** (`geotext`/`pycountry`) or travel keyword (`flight|train|airport|hotel|to`, etc.).
-- **Goals**: starts with `Goal:` or `To ` (case-insensitive).
+## Input Rules
+- **Events**: time format or phrase (via `dateparser`).
+- **Dates**: `Mon DD`.
+- **Travel**: date + city/country or travel keyword.
+- **Goals**: starts with `Goal:` or `To `.
 - **Other**: fallback.
 
 ---
 
-## Settings (in main page)
+## Settings
 - **Show Travel Schedule** toggle.
 - **12-hour AM/PM only**.
-- Persisted in per-user file as lines like: `::setting:show_travel=1`.
+- Stored as first line JSON:  
+  `SETTINGS:{"travel_enabled": false, "time_format": "12h"}`
 
 ---
 
 ## Data
 - Per-user file: `scheduled_data/<email>.txt`
-- If file exists → load & append. If not → start empty. No preloads.
 
 ---
 
-## Routes
-- `/` main (login + dashboard)
-- `/add` append a single natural-text line
-- `/logout` clear session
-- `/reset` delete user data file
-- `/status` simple HTML service status (no extra template)
-- `/healthz` JSON health check
+## 📌 Routes
+
+| Route            | Method | Purpose |
+|------------------|--------|---------|
+| `/`              | GET    | Main page (events, dates, travel, other). |
+| `/login`         | POST   | User login. |
+| `/logout`        | POST   | User logout. |
+| `/toggle_travel` | POST   | Toggle travel detection. |
+| `/add`           | POST   | Add entry. |
+| `/reset`         | POST   | Reset user data. |
+| `/status`        | GET    | Service status. |
+| `/healthz`       | GET    | Health check (Render). |
+| `/debug`         | GET    | Debug info. |
+| `/auth/gcal`     | GET    | Begin Google OAuth. |
+| `/gcal/callback` | GET    | Google OAuth callback. |
+| `/health/gcal`   | GET    | Check Google API. |
+| `/gcal/next5`    | GET    | Show next 5 Google events. |
+| `/gcal`          | GET    | Redirect to auth. |
+| `/_envz`         | GET    | Masked env vars. |
+| `/__routes`      | GET    | Show all routes. |
+
+### ⚠️ Security
+Disable `/debug`, `/_envz`, `/__routes` in production. Keep secrets (`APP_SECRET_KEY`, `GOOGLE_CLIENT_SECRET`) in Render Environment Settings.
 
 ---
 
-## Local Run
-```bash
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-gunicorn app:app --bind 0.0.0.0:5000
-# visit http://127.0.0.1:5000
+## 🚀 Deploy on Render
 
+### Procfile
 
----
-
-## Local development
-
-    make run
-
-Creates a venv (if missing), installs deps, and runs Flask in debug.
-
-## Production-like run
-
-    make gunicorn
-
-Runs Gunicorn on 0.0.0.0:5000.
-
-## Lint & format
-
-    make lint      # ruff
-    make format    # black
-
-First call installs dev tools in the venv.
-
-## Deploy
-
-    make deploy
-
-Pushes main to GitHub (Render will auto-deploy if connected).
-
-## Env
-See \`.env.example\`. Copy to \`.env\` and adjust later if you add python-dotenv.
+### render.yaml
+```yaml
+services:
+- type: web
+  name: scheduled-staging
+  runtime: python
+  repo: https://github.com/sociallyRK/scheduled-sync
+  buildCommand: pip install -r requirements.txt
+  startCommand: gunicorn app:app --chdir . --bind 0.0.0.0:$PORT --timeout 120
+  autoDeployTrigger: on
+  plan: pro plus

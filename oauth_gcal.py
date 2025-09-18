@@ -25,7 +25,8 @@ TOKEN_URI = "https://oauth2.googleapis.com/token"
 # Serializer for signing/verifying state
 # ------------------------
 def _ser():
-    secret = os.getenv("FLASK_SECRET_KEY") or current_app.config.get("SECRET_KEY")
+    # Use same key your Flask app uses
+    secret = os.getenv("APP_SECRET_KEY") or current_app.config.get("SECRET_KEY")
     return URLSafeTimedSerializer(secret, salt="gcal-oauth")
 
 # ------------------------
@@ -86,7 +87,7 @@ def finish_auth(authorization_response: str, max_age=600):
     if not state:
         raise RuntimeError("Missing OAuth state")
     try:
-        _ser().loads(state, max_age=max_age)
+        payload = _ser().loads(state, max_age=max_age)
     except SignatureExpired:
         raise RuntimeError("Expired OAuth state")
     except BadSignature:
@@ -97,7 +98,7 @@ def finish_auth(authorization_response: str, max_age=600):
     creds = flow.credentials
     info = json.loads(creds.to_json())
     session["gcal"] = info
-    return info
+    return payload.get("next") or "/"
 
 # ------------------------
 # Build a Google Calendar service client

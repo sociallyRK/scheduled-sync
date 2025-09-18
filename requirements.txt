@@ -26,7 +26,7 @@ python-dotenv==1.0.1      # Environment variable loader
 # ------------------------
 # Google API stack
 # ------------------------
-google-auth>=2.28         # Core Google authentication
-google-auth-oauthlib>=1.2 # OAuth 2.0 flows
-google-api-python-client>=2.129  # Google API discovery & client
+google-auth==2.40.3           # Core Google authentication
+google-auth-oauthlib==1.2.2   # OAuth 2.0 flows
+google-api-python-client==2.182.0  # Google API discovery & client
 google-auth-httplib2==0.2.0   # HTTP transport for Google client
