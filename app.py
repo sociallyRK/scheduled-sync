@@ -37,6 +37,7 @@ TIME_ANY_RE    = re.compile(r"\b(\d{1,2})(?::(\d{2}))?\s*(AM|PM)\b", re.I)
 TIME_START_RE  = re.compile(r"^\s*(\d{1,2})(?::(\d{2}))?\s*(AM|PM)\b", re.I)
 GOAL_RE        = re.compile(r"^\s*(Goal:|To\s)\b", re.I)
 TRAVEL_KEYWORDS= re.compile(r"\b(flight|fly|arrive|depart|airport|train|hotel|check-?in|to)\b", re.I)
+TIME_LEADING_RE= re.compile(r"^\s*\d{1,2}(?::\d{2})?\s*(AM|PM)\b", re.I)
 
 # ----- File helpers -----------------------------------------------------------
 def _safe(email:str)->str: return re.sub(r"[^a-z0-9_.@+-]+","_",email.lower())
@@ -125,6 +126,9 @@ def classify(lines:list[str]):
     travel.sort(  key=lambda x: parse_date_any(x) or datetime.max)
     return schedule, dates, other, travel
 
+def _strip_leading_time(text:str)->str:
+    return TIME_LEADING_RE.sub("", text, count=1).strip()
+
 # ----- GCAL Import (paged) ----------------------------------------------------
 @app.post("/gcal/import_today_to_app")
 @require_gcal
@@ -173,14 +177,16 @@ def gcal_import_today_to_app():
         start = ev.get("start", {})
         if "dateTime" in start:
             dt = datetime.fromisoformat(start["dateTime"].replace("Z", "+00:00")).astimezone(tz)
-            line = f"{_fmt_time(dt)} {summary}"
-            if line.lower() not in existing:
-                out_lines.append(line); existing.add(line.lower()); added_time += 1
+            line = summary if TIME_LEADING_RE.match(summary) else f"{_fmt_time(dt)} {summary}"
+            key = line.lower()
+            if key not in existing:
+                out_lines.append(line); existing.add(key); added_time += 1
         elif "date" in start:
             d = datetime.fromisoformat(start["date"])
             line = f"{d.strftime('%b')} {int(d.strftime('%d'))} {summary}"
-            if line.lower() not in existing:
-                out_lines.append(line); existing.add(line.lower()); added_date += 1
+            key = line.lower()
+            if key not in existing:
+                out_lines.append(line); existing.add(key); added_date += 1
         else:
             continue
         consumed += 1
@@ -363,27 +369,20 @@ def gcal_export_today():
     email = session.get("email")
     if not email: return jsonify({"error":"not logged in"}), 401
     limit = min(int(request.args.get("limit", 20)), 200)
+
     settings, lines = read_user_blob(email)
     schedule, _, _, _ = classify(lines)
     schedule = schedule[:limit]
+
     tz = pytz.timezone("Asia/Kolkata")
     today = tz.localize(datetime.now().replace(hour=0, minute=0, second=0, microsecond=0))
+    svc = build_service()
+
     start_day_utc = today.astimezone(timezone.utc)
     end_day_utc   = (today + timedelta(days=1)).astimezone(timezone.utc)
-    svc = build_service()
     existing = set()
-    existing_resp = svc.events().list(calendarId="primary", singleEvents=True, orderBy="startTime",
-                                      timeMin=start_day_utc.isoformat(), timeMax=end_day_utc.isoformat(),
-                                      maxResults=250).execute()
-    for ev in existing_resp.get("items", []):
-        start = ev.get("start", {})
-        if "dateTime" in start:
-            dt = datetime.fromisoformat(start["dateTime"].replace("Z","+00:00")).astimezone(tz)
-            key = (dt.replace(second=0, microsecond=0), (ev.get("summary") or "").strip().lower())
-            existing.add(key)
-    created = []
-    for s in schedule:
-        tt = parse_time_tuple(s)
-        if not tt: continue
-        h, m = tt
-        start_local = today.replace(hour=h, minute=m, second=0
+    existing_resp = svc.events().list(
+        calendarId="primary", singleEvents=True, orderBy="startTime",
+        timeMin=start_day_utc.isoformat(), timeMax=end_day_utc.isoformat(),
+        maxResults=250
+    ).
