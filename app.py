@@ -1,7 +1,7 @@
+#app.py the vegetables and the protein
 import os, re, json, traceback
 from pathlib import Path
-from datetime import datetime, timezone, timedelta #add timedelta
-# end_utc = (start_local + timedelta(minutes=10)).astimezone(timezone.utc)
+from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 from flask import (
     Flask, request, render_template, redirect, session, url_for, flash, jsonify
@@ -153,9 +153,20 @@ def toggle_travel():
 @app.post("/add")
 def add():
     email = session.get("email")
-    if not email: flash("Login required."); return redirect(url_for("index"))
+    if not email:
+        flash("Login required."); return redirect(url_for("index"))
     text = request.form.get("add","").strip()
-    if text: append_line(email, text)
+
+    # Text command: #IMPORT TODAY
+    if text.lower() in {"#import today", "import today", "#import_today"}:
+        resp = gcal_import_today_to_app()
+        data = resp.get_json(silent=True) or {}
+        n = int(data.get("total", 0))
+        flash(f"Imported {n} items from Google.")
+        return redirect(url_for("index"))
+
+    if text:
+        append_line(email, text)
     return redirect(url_for("index"))
 
 @app.post("/reset")
@@ -200,6 +211,7 @@ def index():
         now_ist=now_ist,
         session_has_gcal=bool(session.get("gcal"))
     )
+
 # ----- Google Calendar --------------------------------------------------------
 @app.get("/auth/gcal")
 def gcal_auth(): return redirect(begin_auth(request.args.get("next", "/")))
@@ -224,7 +236,6 @@ def gcal_next5():
                                orderBy="startTime", maxResults=5).execute()
     return jsonify(events)
 
-# ----- Google Calendar: extras (import/export) --------------------------------
 @app.get("/gcal/today")
 @require_gcal
 def gcal_today():
@@ -291,7 +302,8 @@ def gcal_export_today():
         created.append(svc.events().insert(calendarId="primary", body=ev).execute())
 
     return jsonify({"created": [e.get("htmlLink") for e in created], "count": len(created)})
-# Export "dates" (and travel) → all-day events on those dates (parsed from lines)
+
+# Export "dates" (and travel) → all-day events
 @app.post("/gcal/export_dates")
 @require_gcal
 def gcal_export_dates():
@@ -332,6 +344,7 @@ def _envz():
 @app.get("/__routes")
 def __routes(): return {"routes":[str(r) for r in app.url_map.iter_rules()]}
 
+# Import today's Google events -> Scheduled (Time/Dates) with dedupe
 @app.post("/gcal/import_today_to_app")
 @require_gcal
 def gcal_import_today_to_app():
@@ -342,7 +355,6 @@ def gcal_import_today_to_app():
     if not email:
         return jsonify({"error": "not logged in"}), 401
 
-    # 1) Fetch today from Google (IST window)
     tz = pytz.timezone("Asia/Kolkata")
     start_local = tz.localize(datetime.now().replace(hour=0, minute=0, second=0, microsecond=0))
     end_local   = start_local + timedelta(days=1)
@@ -363,7 +375,6 @@ def gcal_import_today_to_app():
         ap = "AM" if dt.hour < 12 else "PM"
         return f"{hh:02d}:{mm} {ap}"
 
-    # 2) Load existing lines and build a fast lookup set (case-insensitive)
     settings, lines = read_user_blob(email)
     existing = set(x.strip().lower() for x in lines if x.strip())
 
@@ -376,26 +387,20 @@ def gcal_import_today_to_app():
             continue
 
         start = ev.get("start", {})
-        # A) Timed event
-        if "dateTime" in start:
+        if "dateTime" in start:  # timed
             dt = datetime.fromisoformat(start["dateTime"].replace("Z", "+00:00")).astimezone(tz)
             line = f"{_fmt_time(dt)} {summary}"
-            if line.strip().lower() not in existing:
-                out_lines.append(line)
-                existing.add(line.strip().lower())
-                added_time += 1
-        # B) All-day event
-        elif "date" in start:
+            key = line.strip().lower()
+            if key not in existing:
+                out_lines.append(line); existing.add(key); added_time += 1
+        elif "date" in start:    # all-day
             d = datetime.fromisoformat(start["date"])
-            mon = d.strftime("%b")
-            day = int(d.strftime("%d"))
+            mon = d.strftime("%b"); day = int(d.strftime("%d"))
             line = f"{mon} {day} {summary}"
-            if line.strip().lower() not in existing:
-                out_lines.append(line)
-                existing.add(line.strip().lower())
-                added_date += 1
+            key = line.strip().lower()
+            if key not in existing:
+                out_lines.append(line); existing.add(key); added_date += 1
 
-    # 3) Save back
     write_user_blob(email, settings, out_lines)
     return jsonify({"imported_time": added_time, "imported_dates": added_date, "total": added_time + added_date})
 
