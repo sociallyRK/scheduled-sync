@@ -332,5 +332,72 @@ def _envz():
 @app.get("/__routes")
 def __routes(): return {"routes":[str(r) for r in app.url_map.iter_rules()]}
 
+@app.post("/gcal/import_today_to_app")
+@require_gcal
+def gcal_import_today_to_app():
+    from datetime import datetime, timedelta, timezone
+    import pytz
+
+    email = session.get("email")
+    if not email:
+        return jsonify({"error": "not logged in"}), 401
+
+    # 1) Fetch today from Google (IST window)
+    tz = pytz.timezone("Asia/Kolkata")
+    start_local = tz.localize(datetime.now().replace(hour=0, minute=0, second=0, microsecond=0))
+    end_local   = start_local + timedelta(days=1)
+
+    svc = build_service()
+    resp = svc.events().list(
+        calendarId="primary",
+        singleEvents=True,
+        orderBy="startTime",
+        timeMin=start_local.astimezone(timezone.utc).isoformat(),
+        timeMax=end_local.astimezone(timezone.utc).isoformat(),
+        maxResults=100,
+    ).execute()
+
+    def _fmt_time(dt: datetime) -> str:
+        hh = dt.hour % 12 or 12
+        mm = f"{dt.minute:02d}"
+        ap = "AM" if dt.hour < 12 else "PM"
+        return f"{hh:02d}:{mm} {ap}"
+
+    # 2) Load existing lines and build a fast lookup set (case-insensitive)
+    settings, lines = read_user_blob(email)
+    existing = set(x.strip().lower() for x in lines if x.strip())
+
+    added_time, added_date = 0, 0
+    out_lines = lines[:]  # copy
+
+    for ev in resp.get("items", []):
+        summary = (ev.get("summary") or "").strip()
+        if not summary:
+            continue
+
+        start = ev.get("start", {})
+        # A) Timed event
+        if "dateTime" in start:
+            dt = datetime.fromisoformat(start["dateTime"].replace("Z", "+00:00")).astimezone(tz)
+            line = f"{_fmt_time(dt)} {summary}"
+            if line.strip().lower() not in existing:
+                out_lines.append(line)
+                existing.add(line.strip().lower())
+                added_time += 1
+        # B) All-day event
+        elif "date" in start:
+            d = datetime.fromisoformat(start["date"])
+            mon = d.strftime("%b")
+            day = int(d.strftime("%d"))
+            line = f"{mon} {day} {summary}"
+            if line.strip().lower() not in existing:
+                out_lines.append(line)
+                existing.add(line.strip().lower())
+                added_date += 1
+
+    # 3) Save back
+    write_user_blob(email, settings, out_lines)
+    return jsonify({"imported_time": added_time, "imported_dates": added_date, "total": added_time + added_date})
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
