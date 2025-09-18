@@ -1,4 +1,3 @@
-#app.py the vegetables and the protein
 import os, re, json, traceback
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
@@ -141,6 +140,24 @@ def login():
 def logout():
     session.clear(); flash("Logged out."); return redirect(url_for("index"))
 
+# ----- Text commands (dictionary-driven) -------------------------------------
+def _export_all():
+    ct = gcal_export_today().get_json(silent=True) or {}
+    cd = gcal_export_dates().get_json(silent=True) or {}
+    return {"today": ct, "dates": cd}
+
+# COMMANDS map: lowercased command text -> callable returning Response or dict
+COMMANDS = {
+    "#import today": lambda: gcal_import_today_to_app(),
+    "import today":  lambda: gcal_import_today_to_app(),
+    "#export today": lambda: gcal_export_today(),
+    "export today":  lambda: gcal_export_today(),
+    "#export dates": lambda: gcal_export_dates(),
+    "export dates":  lambda: gcal_export_dates(),
+    "#export all":   _export_all,
+    "export all":    _export_all,
+}
+
 # ----- App routes -------------------------------------------------------------
 @app.post("/toggle_travel")
 def toggle_travel():
@@ -156,15 +173,23 @@ def add():
     if not email:
         flash("Login required."); return redirect(url_for("index"))
     text = request.form.get("add","").strip()
+    t = text.lower()
 
-    # Text command: #IMPORT TODAY
-    if text.lower() in {"#import today", "import today", "#import_today"}:
-        resp = gcal_import_today_to_app()
-        data = resp.get_json(silent=True) or {}
-        n = int(data.get("total", 0))
-        flash(f"Imported {n} items from Google.")
+    # Dictionary-driven commands
+    if t in COMMANDS:
+        resp = COMMANDS[t]()
+        if isinstance(resp, dict):  # export all
+            ct, cd = resp.get("today", {}), resp.get("dates", {})
+            flash(f"Exported {int(ct.get('count',0))} time + {int(cd.get('count',0))} date events.")
+        else:
+            data = resp.get_json(silent=True) or {}
+            if "total" in data:
+                flash(f"Imported {int(data.get('total',0))} items from Google.")
+            elif "count" in data:
+                flash(f"Exported {int(data.get('count',0))} items to Google.")
         return redirect(url_for("index"))
 
+    # Default: just append line
     if text:
         append_line(email, text)
     return redirect(url_for("index"))
@@ -202,14 +227,8 @@ def index():
 
     return render_template(
         "index.html",
-        email=email,
-        schedule=schedule,
-        dates=dates,
-        other=other,
-        travel=travel,
-        travel_enabled=travel_enabled,
-        now_ist=now_ist,
-        session_has_gcal=bool(session.get("gcal"))
+        email=email, schedule=schedule, dates=dates, other=other, travel=travel,
+        travel_enabled=travel_enabled, now_ist=now_ist, session_has_gcal=bool(session.get("gcal"))
     )
 
 # ----- Google Calendar --------------------------------------------------------
@@ -260,13 +279,14 @@ def gcal_add_demo():
     now = datetime.now(timezone.utc) + timedelta(minutes=10)
     event = {
         "summary": "Scheduled Sync Demo Event",
+        "description": "created-by:ScheduledSync",
         "start": {"dateTime": now.isoformat()},
         "end": {"dateTime": (now + timedelta(minutes=30)).isoformat()},
     }
     created = svc.events().insert(calendarId="primary", body=event).execute()
     return jsonify({"created": created.get("htmlLink")})
 
-# Export "today time entries" → 10-minute events at that time (IST → Google)
+# Export "today time entries" → 10-minute events at that time (IST → Google), deduped & tagged
 @app.post("/gcal/export_today")
 @require_gcal
 def gcal_export_today():
@@ -274,36 +294,56 @@ def gcal_export_today():
     import pytz
 
     email = session.get("email")
-    if not email:
-        return jsonify({"error":"not logged in"}), 401
+    if not email: return jsonify({"error":"not logged in"}), 401
 
     settings, lines = read_user_blob(email)
     schedule, _, _, _ = classify(lines)
 
     tz = pytz.timezone("Asia/Kolkata")
     today = tz.localize(datetime.now().replace(hour=0, minute=0, second=0, microsecond=0))
+    start_day_utc = today.astimezone(timezone.utc)
+    end_day_utc   = (today + timedelta(days=1)).astimezone(timezone.utc)
+
     svc = build_service()
+
+    # existing events today (for dedupe): (start_local_minute, summary_lower)
+    existing = set()
+    existing_resp = svc.events().list(
+        calendarId="primary", singleEvents=True, orderBy="startTime",
+        timeMin=start_day_utc.isoformat(), timeMax=end_day_utc.isoformat(), maxResults=250
+    ).execute()
+    for ev in existing_resp.get("items", []):
+        start = ev.get("start", {})
+        summary = (ev.get("summary") or "").strip().lower()
+        if "dateTime" in start:
+            dt = datetime.fromisoformat(start["dateTime"].replace("Z", "+00:00")).astimezone(tz)
+            key = (dt.replace(second=0, microsecond=0), summary)
+            existing.add(key)
+
     created = []
-
-    for s in schedule[:100]:  # safety cap
+    for s in schedule[:200]:
         tt = parse_time_tuple(s)
-        if not tt:
-            continue
+        if not tt: continue
         h, m = tt
-        start_local = today.replace(hour=h, minute=m)
+        start_local = today.replace(hour=h, minute=m, second=0, microsecond=0)
+        end_local   = start_local + timedelta(minutes=10)
+        key = (start_local, s.strip().lower())
+        if key in existing:
+            continue
         start_utc = start_local.astimezone(timezone.utc)
-        end_utc = (start_local + timedelta(minutes=10)).astimezone(timezone.utc)
-
+        end_utc   = end_local.astimezone(timezone.utc)
         ev = {
             "summary": s,
+            "description": "created-by:ScheduledSync",
             "start": {"dateTime": start_utc.isoformat()},
             "end":   {"dateTime": end_utc.isoformat()},
         }
         created.append(svc.events().insert(calendarId="primary", body=ev).execute())
+        existing.add(key)
 
     return jsonify({"created": [e.get("htmlLink") for e in created], "count": len(created)})
 
-# Export "dates" (and travel) → all-day events
+# Export "dates" (and travel) → all-day events, tagged
 @app.post("/gcal/export_dates")
 @require_gcal
 def gcal_export_dates():
@@ -318,11 +358,12 @@ def gcal_export_dates():
     def _iso_date(dt: datetime) -> str:
         return dt.date().isoformat()
 
-    for txt in (dates + travel)[:200]:  # safety cap
+    for txt in (dates + travel)[:200]:
         dt = parse_date_prefix(txt)
         if not dt: continue
         ev = {
             "summary": txt,
+            "description": "created-by:ScheduledSync",
             "start": {"date": _iso_date(dt)},
             "end":   {"date": _iso_date(dt)},
         }
@@ -344,7 +385,7 @@ def _envz():
 @app.get("/__routes")
 def __routes(): return {"routes":[str(r) for r in app.url_map.iter_rules()]}
 
-# Import today's Google events -> Scheduled (Time/Dates) with dedupe
+# Import today's Google events -> Scheduled (Time/Dates) with dedupe; skip our tagged exports
 @app.post("/gcal/import_today_to_app")
 @require_gcal
 def gcal_import_today_to_app():
@@ -352,8 +393,7 @@ def gcal_import_today_to_app():
     import pytz
 
     email = session.get("email")
-    if not email:
-        return jsonify({"error": "not logged in"}), 401
+    if not email: return jsonify({"error": "not logged in"}), 401
 
     tz = pytz.timezone("Asia/Kolkata")
     start_local = tz.localize(datetime.now().replace(hour=0, minute=0, second=0, microsecond=0))
@@ -361,9 +401,7 @@ def gcal_import_today_to_app():
 
     svc = build_service()
     resp = svc.events().list(
-        calendarId="primary",
-        singleEvents=True,
-        orderBy="startTime",
+        calendarId="primary", singleEvents=True, orderBy="startTime",
         timeMin=start_local.astimezone(timezone.utc).isoformat(),
         timeMax=end_local.astimezone(timezone.utc).isoformat(),
         maxResults=100,
@@ -379,11 +417,15 @@ def gcal_import_today_to_app():
     existing = set(x.strip().lower() for x in lines if x.strip())
 
     added_time, added_date = 0, 0
-    out_lines = lines[:]  # copy
+    out_lines = lines[:]
 
     for ev in resp.get("items", []):
         summary = (ev.get("summary") or "").strip()
-        if not summary:
+        if not summary: continue
+
+        # Skip our own exported events
+        desc = (ev.get("description") or "").lower()
+        if "created-by:scheduledsync" in desc:
             continue
 
         start = ev.get("start", {})
