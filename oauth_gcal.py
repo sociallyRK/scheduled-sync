@@ -132,11 +132,11 @@ def require_gcal(fn):
 def health():
     ok = {
         "redirect_uri": _redirect_uri(),
-        "have_client_id": bool(os.getenv("GOOGLE_CLIENT_ID")),
-        "have_client_secret": bool(os.getenv("GOOGLE_CLIENT_SECRET")),
+        "client_id_present": bool(os.getenv("GOOGLE_CLIENT_ID")),
+        "client_secret_present": bool(os.getenv("GOOGLE_CLIENT_SECRET")),
         "scopes": _scopes(),
-        "session_has_gcal": bool(session.get("gcal")),
+        "session_has_google_credentials": bool(session.get("gcal")),
         "url_root": request.url_root,
-        "now": int(time.time()),
+        "timestamp": datetime.utcnow().isoformat() + "Z"
     }
     return jsonify(ok)
