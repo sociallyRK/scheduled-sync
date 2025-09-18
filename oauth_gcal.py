@@ -69,13 +69,18 @@ def _scopes():
 def begin_auth(next_url="/"):
     payload = {"nonce": uuid.uuid4().hex, "t": int(time.time()), "next": next_url}
     state = _ser().dumps(payload)
-    flow = Flow.from_client_config(_client_config(), scopes=_scopes())
+
+    # Set redirect_uri once here
+    flow = Flow.from_client_config(
+        _client_config(), scopes=_scopes(), redirect_uri=_redirect_uri()
+    )
+
+    # Do NOT pass redirect_uri again
     auth_url, _ = flow.authorization_url(
         access_type="offline",
         include_granted_scopes=True,
         prompt="consent",
         state=state,
-        redirect_uri=_redirect_uri(),
     )
     return auth_url
 
