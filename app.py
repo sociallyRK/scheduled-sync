@@ -385,4 +385,4 @@ def gcal_export_today():
         calendarId="primary", singleEvents=True, orderBy="startTime",
         timeMin=start_day_utc.isoformat(), timeMax=end_day_utc.isoformat(),
         maxResults=250
-    ).
+    ).execute()
