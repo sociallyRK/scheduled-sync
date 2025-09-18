@@ -16,6 +16,7 @@
     input,button{padding:8px;border:1px solid #ddd;border-radius:10px}
     form.inline{display:inline}
     .bar button{margin-right:8px}
+    .status{font-size:13px;color:green;margin-left:8px}
   </style>
 </head>
 <body>
@@ -24,14 +25,19 @@
   <div class="bar">
     {% if email %}
       <form class="inline" method="post" action="/logout"><button>Logout</button></form>
-      <!-- Connect to Google (starts OAuth) -->
+
+      <!-- Google integrations -->
       <a href="/auth/gcal"><button>Connect Google</button></a>
-      <!-- Import: show next 5 events -->
-      <a href="/gcal/next5"><button>Import from Google (Next 5)</button></a>
-      <!-- Export: not implemented yet -->
-      <button disabled title="Coming soon">Export to Google (Today)</button>
-      <!-- Disconnect: clear session -->
+      <a href="/gcal/next5"><button>Import Next 5</button></a>
+      <a href="/gcal/today"><button>Import Today (IST)</button></a>
+      <form class="inline" method="post" action="/gcal/add_demo"><button>Write Demo Event</button></form>
+      <form class="inline" method="post" action="/gcal/export_today"><button>Export Today → Google</button></form>
+      <form class="inline" method="post" action="/gcal/export_dates"><button>Export Dates → Google</button></form>
       <a href="/logout"><button>Disconnect Google</button></a>
+
+      {% if session_has_gcal %}
+        <span class="status">Google Connected ✅</span>
+      {% endif %}
     {% endif %}
   </div>
 </header>

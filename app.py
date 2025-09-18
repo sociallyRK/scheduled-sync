@@ -1,6 +1,7 @@
 import os, re, json, traceback
 from pathlib import Path
 from datetime import datetime, timezone, timedelta #add timedelta
+# end_utc = (start_local + timedelta(minutes=10)).astimezone(timezone.utc)
 from dotenv import load_dotenv
 from flask import (
     Flask, request, render_template, redirect, session, url_for, flash, jsonify
@@ -178,14 +179,27 @@ def debug():
 # ----- UI --------------------------------------------------------------------
 @app.get("/")
 def index():
-    email = session.get("email"); schedule = dates = other = travel = []; travel_enabled = False
+    email = session.get("email")
+    schedule = dates = other = travel = []
+    travel_enabled = False
     now_ist = datetime.now().strftime("%Y-%m-%d %H:%M")
-    if email:
-        settings, lines = read_user_blob(email); travel_enabled = settings.get("travel_enabled", False)
-        schedule, dates, other, travel = classify(lines)
-    return render_template("index.html", email=email, schedule=schedule, dates=dates, other=other,
-                           travel=travel, travel_enabled=travel_enabled, now_ist=now_ist)
 
+    if email:
+        settings, lines = read_user_blob(email)
+        travel_enabled = settings.get("travel_enabled", False)
+        schedule, dates, other, travel = classify(lines)
+
+    return render_template(
+        "index.html",
+        email=email,
+        schedule=schedule,
+        dates=dates,
+        other=other,
+        travel=travel,
+        travel_enabled=travel_enabled,
+        now_ist=now_ist,
+        session_has_gcal=bool(session.get("gcal"))
+    )
 # ----- Google Calendar --------------------------------------------------------
 @app.get("/auth/gcal")
 def gcal_auth(): return redirect(begin_auth(request.args.get("next", "/")))
