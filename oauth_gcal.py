@@ -78,7 +78,6 @@ def begin_auth(next_url="/"):
     # Do NOT pass redirect_uri again
     auth_url, _ = flow.authorization_url(
         access_type="offline",
-        include_granted_scopes=True,
         prompt="consent",
         state=state,
     )
