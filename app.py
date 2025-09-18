@@ -10,7 +10,6 @@ import pycountry
 from werkzeug.middleware.proxy_fix import ProxyFix
 from oauth_gcal import begin_auth, finish_auth, require_gcal, build_service, health
 
-# Load .env first (so env vars are available everywhere)
 load_dotenv()
 
 # ----- Date parsing -----------------------------------------------------------
@@ -106,8 +105,7 @@ def _pycountry_match(word:str)->bool:
 
 def is_travel(line:str)->bool:
     if not parse_date_prefix(line): return False
-    tail = DATE_PREFIX_RE.sub("", line).strip()
-    geo = GeoText(tail)
+    tail = DATE_PREFIX_RE.sub("", line).strip(); geo = GeoText(tail)
     has_city_country = bool(geo.cities or geo.countries) or any(_pycountry_match(tok) for tok in tail.split())
     has_keyword = bool(TRAVEL_KEYWORDS.search(tail))
     return has_city_country or has_keyword
@@ -177,14 +175,16 @@ def debug():
             "files": [p.name for p in DATA_DIR.glob("*.txt")],
             "users_file": USERS.exists()}
 
+# ----- UI --------------------------------------------------------------------
 @app.get("/")
 def index():
     email = session.get("email"); schedule = dates = other = travel = []; travel_enabled = False
+    now_ist = datetime.now().strftime("%Y-%m-%d %H:%M")
     if email:
         settings, lines = read_user_blob(email); travel_enabled = settings.get("travel_enabled", False)
         schedule, dates, other, travel = classify(lines)
     return render_template("index.html", email=email, schedule=schedule, dates=dates, other=other,
-                           travel=travel, travel_enabled=travel_enabled)
+                           travel=travel, travel_enabled=travel_enabled, now_ist=now_ist)
 
 # ----- Google Calendar --------------------------------------------------------
 @app.get("/auth/gcal")
@@ -209,6 +209,96 @@ def gcal_next5():
     events = svc.events().list(calendarId="primary", singleEvents=True,
                                orderBy="startTime", maxResults=5).execute()
     return jsonify(events)
+
+# ----- Google Calendar: extras (import/export) --------------------------------
+@app.get("/gcal/today")
+@require_gcal
+def gcal_today():
+    from datetime import datetime, timedelta, timezone
+    import pytz
+    svc = build_service()
+    tz = pytz.timezone("Asia/Kolkata")
+    start = tz.localize(datetime.now().replace(hour=0, minute=0, second=0, microsecond=0))
+    end   = start + timedelta(days=1)
+    events = svc.events().list(
+        calendarId="primary", singleEvents=True, orderBy="startTime",
+        timeMin=start.astimezone(timezone.utc).isoformat(),
+        timeMax=end.astimezone(timezone.utc).isoformat(), maxResults=50
+    ).execute()
+    return jsonify(events)
+
+@app.post("/gcal/add_demo")
+@require_gcal
+def gcal_add_demo():
+    from datetime import datetime, timedelta, timezone
+    svc = build_service()
+    now = datetime.now(timezone.utc) + timedelta(minutes=10)
+    event = {
+        "summary": "Scheduled Sync Demo Event",
+        "start": {"dateTime": now.isoformat()},
+        "end": {"dateTime": (now + timedelta(minutes=30)).isoformat()},
+    }
+    created = svc.events().insert(calendarId="primary", body=event).execute()
+    return jsonify({"created": created.get("htmlLink")})
+
+# Export "today time entries" → 10-minute events at that time (IST → Google)
+@app.post("/gcal/export_today")
+@require_gcal
+def gcal_export_today():
+    from datetime import datetime, timezone
+    import pytz
+    email = session.get("email")
+    if not email: return jsonify({"error":"not logged in"}), 401
+    settings, lines = read_user_blob(email)
+    schedule, _, _, _ = classify(lines)
+
+    tz = pytz.timezone("Asia/Kolkata")
+    today = tz.localize(datetime.now().replace(hour=0, minute=0, second=0, microsecond=0))
+    svc = build_service()
+    created = []
+
+    for s in schedule[:100]:  # safety cap
+        tt = parse_time_tuple(s)
+        if not tt: continue
+        h, m = tt
+        start_local = today.replace(hour=h, minute=m)
+        start_utc = start_local.astimezone(timezone.utc)
+        end_utc = (start_local + pytz.timedelta(minutes=10)).astimezone(timezone.utc)
+        ev = {
+            "summary": s,
+            "start": {"dateTime": start_utc.isoformat()},
+            "end":   {"dateTime": end_utc.isoformat()},
+        }
+        created.append(svc.events().insert(calendarId="primary", body=ev).execute())
+
+    return jsonify({"created": [e.get("htmlLink") for e in created], "count": len(created)})
+
+# Export "dates" (and travel) → all-day events on those dates (parsed from lines)
+@app.post("/gcal/export_dates")
+@require_gcal
+def gcal_export_dates():
+    from datetime import timezone
+    email = session.get("email")
+    if not email: return jsonify({"error":"not logged in"}), 401
+    settings, lines = read_user_blob(email)
+    _, dates, _, travel = classify(lines)
+    svc = build_service()
+    created = []
+
+    def _iso_date(dt: datetime) -> str:
+        return dt.date().isoformat()
+
+    for txt in (dates + travel)[:200]:  # safety cap
+        dt = parse_date_prefix(txt)
+        if not dt: continue
+        ev = {
+            "summary": txt,
+            "start": {"date": _iso_date(dt)},
+            "end":   {"date": _iso_date(dt)},
+        }
+        created.append(svc.events().insert(calendarId="primary", body=ev).execute())
+
+    return jsonify({"created": [e.get("htmlLink") for e in created], "count": len(created)})
 
 @app.get("/gcal")
 def gcal_root(): return redirect(url_for("gcal_auth"))
