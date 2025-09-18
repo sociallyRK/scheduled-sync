@@ -125,6 +125,77 @@ def classify(lines:list[str]):
     travel.sort(  key=lambda x: parse_date_any(x) or datetime.max)
     return schedule, dates, other, travel
 
+# ----- GCAL Import (paged) ----------------------------------------------------
+@app.post("/gcal/import_today_to_app")
+@require_gcal
+def gcal_import_today_to_app():
+    import pytz
+    email = session.get("email")
+    if not email: return jsonify({"error": "not logged in"}), 401
+
+    limit = max(1, min(int(request.args.get("limit", 60)), 500))
+    page_token = request.args.get("pageToken")
+
+    tz = pytz.timezone("Asia/Kolkata")
+    start_local = tz.localize(datetime.now().replace(hour=0, minute=0, second=0, microsecond=0))
+    end_local   = start_local + timedelta(days=1)
+
+    svc = build_service()
+    req = svc.events().list(
+        calendarId="primary",
+        singleEvents=True, orderBy="startTime",
+        timeMin=start_local.astimezone(timezone.utc).isoformat(),
+        timeMax=end_local.astimezone(timezone.utc).isoformat(),
+        maxResults=min(limit, 200),
+        pageToken=page_token,
+        fields="items(start,summary,description),nextPageToken"
+    )
+    resp = req.execute()
+
+    def _fmt_time(dt: datetime) -> str:
+        hh = dt.hour % 12 or 12
+        mm = f"{dt.minute:02d}"
+        ap = "AM" if dt.hour < 12 else "PM"
+        return f"{hh:02d}:{mm} {ap}"
+
+    settings, lines = read_user_blob(email)
+    existing = set(x.strip().lower() for x in lines if x.strip())
+    out_lines = lines[:]
+    added_time = added_date = 0
+    consumed = 0
+
+    for ev in resp.get("items", []):
+        if consumed >= limit: break
+        summary = (ev.get("summary") or "").strip()
+        if not summary: continue
+        if "created-by:scheduledsync" in (ev.get("description") or "").lower():
+            continue
+        start = ev.get("start", {})
+        if "dateTime" in start:
+            dt = datetime.fromisoformat(start["dateTime"].replace("Z", "+00:00")).astimezone(tz)
+            line = f"{_fmt_time(dt)} {summary}"
+            if line.lower() not in existing:
+                out_lines.append(line); existing.add(line.lower()); added_time += 1
+        elif "date" in start:
+            d = datetime.fromisoformat(start["date"])
+            line = f"{d.strftime('%b')} {int(d.strftime('%d'))} {summary}"
+            if line.lower() not in existing:
+                out_lines.append(line); existing.add(line.lower()); added_date += 1
+        else:
+            continue
+        consumed += 1
+
+    if consumed:
+        write_user_blob(email, settings, out_lines)
+
+    return jsonify({
+        "imported_time": added_time,
+        "imported_dates": added_date,
+        "total": added_time + added_date,
+        "nextPageToken": resp.get("nextPageToken"),
+        "limit": limit
+    })
+
 # ----- Auth routes (login/logout) --------------------------------------------
 @app.post("/login")
 def login():
@@ -143,67 +214,11 @@ def login():
 def logout():
     session.clear(); flash("Logged out."); return redirect(url_for("index"))
 
-# Dictionary-driven commands
+# ----- Dictionary-driven commands --------------------------------------------
 def _export_all():
     ct = gcal_export_today().get_json(silent=True) or {}
     cd = gcal_export_dates().get_json(silent=True) or {}
     return {"today": ct, "dates": cd}
-
-@app.post("/gcal/import_today_to_app")
-@require_gcal
-def gcal_import_today_to_app():
-    import pytz
-    email = session.get("email")
-    if not email: 
-        return jsonify({"error": "not logged in"}), 401
-
-    tz = pytz.timezone("Asia/Kolkata")
-    start_local = tz.localize(datetime.now().replace(hour=0, minute=0, second=0, microsecond=0))
-    end_local   = start_local + timedelta(days=1)
-
-    svc = build_service()
-    resp = svc.events().list(
-        calendarId="primary", singleEvents=True, orderBy="startTime",
-        timeMin=start_local.astimezone(timezone.utc).isoformat(),
-        timeMax=end_local.astimezone(timezone.utc).isoformat(),
-        maxResults=100,
-    ).execute()
-
-    def _fmt_time(dt: datetime) -> str:
-        hh = dt.hour % 12 or 12
-        mm = f"{dt.minute:02d}"
-        ap = "AM" if dt.hour < 12 else "PM"
-        return f"{hh:02d}:{mm} {ap}"
-
-    settings, lines = read_user_blob(email)
-    existing = set(x.strip().lower() for x in lines if x.strip())
-    out_lines = lines[:]
-    added_time, added_date = 0, 0
-
-    for ev in resp.get("items", []):
-        summary = (ev.get("summary") or "").strip()
-        if not summary:
-            continue
-        # skip our own exports
-        if "created-by:scheduledsync" in (ev.get("description") or "").lower():
-            continue
-        start = ev.get("start", {})
-        if "dateTime" in start:
-            dt = datetime.fromisoformat(start["dateTime"].replace("Z", "+00:00")).astimezone(tz)
-            line = f"{_fmt_time(dt)} {summary}"
-        elif "date" in start:
-            d = datetime.fromisoformat(start["date"])
-            line = f"{d.strftime('%b')} {int(d.strftime('%d'))} {summary}"
-        else:
-            continue
-        key = line.strip().lower()
-        if key not in existing:
-            out_lines.append(line); existing.add(key)
-            if "dateTime" in start: added_time += 1
-            else: added_date += 1
-
-    write_user_blob(email, settings, out_lines)
-    return jsonify({"imported_time": added_time, "imported_dates": added_date, "total": added_time + added_date})
 
 COMMANDS = {
     "#import today": lambda: gcal_import_today_to_app(),
@@ -371,57 +386,4 @@ def gcal_export_today():
         tt = parse_time_tuple(s)
         if not tt: continue
         h, m = tt
-        start_local = today.replace(hour=h, minute=m, second=0, microsecond=0)
-        end_local   = start_local + timedelta(minutes=10)
-        key = (start_local, s.strip().lower())
-        if key in existing: continue
-        ev = {
-            "summary": s,
-            "description": "created-by:ScheduledSync",
-            "start": {"dateTime": start_local.astimezone(timezone.utc).isoformat()},
-            "end":   {"dateTime": end_local.astimezone(timezone.utc).isoformat()},
-        }
-        created.append(svc.events().insert(calendarId="primary", body=ev).execute())
-        existing.add(key)
-    if request.args.get("ui") == "1":
-        flash(f"Exported {len(created)} time events to Google (limit {limit}).")
-        return redirect(url_for("index"))
-    return jsonify({"count": len(created), "created": [e.get("htmlLink") for e in created], "limit": limit})
-
-@app.post("/gcal/export_dates")
-@require_gcal
-def gcal_export_dates():
-    email = session.get("email")
-    if not email: return jsonify({"error":"not logged in"}), 401
-    settings, lines = read_user_blob(email)
-    _, dates, _, travel = classify(lines)
-    svc = build_service()
-    created = []
-    for txt in (dates + travel)[:200]:
-        dt = parse_date_prefix(txt)
-        if not dt: continue
-        ev = {
-            "summary": txt,
-            "description": "created-by:ScheduledSync",
-            "start": {"date": dt.date().isoformat()},
-            "end":   {"date": (dt.date() + timedelta(days=1)).isoformat()},  # end exclusive
-        }
-        created.append(svc.events().insert(calendarId="primary", body=ev).execute())
-    return jsonify({"created": [e.get("htmlLink") for e in created], "count": len(created)})
-
-@app.get("/gcal")
-def gcal_root(): return redirect(url_for("gcal_auth"))
-
-@app.get("/_envz")
-def _envz():
-    m = lambda v: (v[:6]+"…"+v[-4:]) if v and len(v)>12 else str(bool(v))
-    return {"GOOGLE_CLIENT_ID": m(os.getenv("GOOGLE_CLIENT_ID")),
-            "GOOGLE_CLIENT_SECRET": bool(os.getenv("GOOGLE_CLIENT_SECRET")),
-            "GOOGLE_SCOPES": os.getenv("GOOGLE_SCOPES"),
-            "REDIRECT_USED": request.host_url.rstrip("/") + "/gcal/callback"}
-
-@app.get("/__routes")
-def __routes(): return {"routes":[str(r) for r in app.url_map.iter_rules()]}
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")))# Thu Sep 18 15:10:48 IST 2025
+        start_local = today.replace(hour=h, minute=m, second=0
