@@ -220,7 +220,7 @@ def login():
 def logout():
     session.clear(); flash("Logged out."); return redirect(url_for("index"))
 
-# ----- Dictionary-driven commands --------------------------------------------
+# ----- Commands ---------------------------------------------------------------
 def _export_all():
     ct = gcal_export_today().get_json(silent=True) or {}
     cd = gcal_export_dates().get_json(silent=True) or {}
@@ -237,7 +237,7 @@ COMMANDS = {
     "export all":    _export_all,
 }
 
-# ----- Probes / health --------------------------------------------------------
+# ----- Probes ----------------------------------------------------------------
 @app.get("/health")
 def app_health(): return {"ok": True}
 
@@ -258,6 +258,10 @@ def debug():
     return {"email": session.get("email"),
             "files": [p.name for p in DATA_DIR.glob("*.txt")],
             "users_file": USERS.exists()}
+
+@app.get("/__routes")
+def __routes():
+    return {"routes":[str(r) for r in app.url_map.iter_rules()]}
 
 # ----- UI --------------------------------------------------------------------
 @app.get("/")
@@ -382,7 +386,4 @@ def gcal_export_today():
     end_day_utc   = (today + timedelta(days=1)).astimezone(timezone.utc)
     existing = set()
     existing_resp = svc.events().list(
-        calendarId="primary", singleEvents=True, orderBy="startTime",
-        timeMin=start_day_utc.isoformat(), timeMax=end_day_utc.isoformat(),
-        maxResults=250
-    ).execute()
+        calendarId="primary
