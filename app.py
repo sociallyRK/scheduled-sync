@@ -1,6 +1,6 @@
 import os, re, json, traceback
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone, timedelta #add timedelta
 from dotenv import load_dotenv
 from flask import (
     Flask, request, render_template, redirect, session, url_for, flash, jsonify
@@ -245,10 +245,13 @@ def gcal_add_demo():
 @app.post("/gcal/export_today")
 @require_gcal
 def gcal_export_today():
-    from datetime import datetime, timezone
+    from datetime import datetime, timezone, timedelta
     import pytz
+
     email = session.get("email")
-    if not email: return jsonify({"error":"not logged in"}), 401
+    if not email:
+        return jsonify({"error":"not logged in"}), 401
+
     settings, lines = read_user_blob(email)
     schedule, _, _, _ = classify(lines)
 
@@ -259,11 +262,13 @@ def gcal_export_today():
 
     for s in schedule[:100]:  # safety cap
         tt = parse_time_tuple(s)
-        if not tt: continue
+        if not tt:
+            continue
         h, m = tt
         start_local = today.replace(hour=h, minute=m)
         start_utc = start_local.astimezone(timezone.utc)
-        end_utc = (start_local + pytz.timedelta(minutes=10)).astimezone(timezone.utc)
+        end_utc = (start_local + timedelta(minutes=10)).astimezone(timezone.utc)
+
         ev = {
             "summary": s,
             "start": {"dateTime": start_utc.isoformat()},
@@ -272,7 +277,6 @@ def gcal_export_today():
         created.append(svc.events().insert(calendarId="primary", body=ev).execute())
 
     return jsonify({"created": [e.get("htmlLink") for e in created], "count": len(created)})
-
 # Export "dates" (and travel) → all-day events on those dates (parsed from lines)
 @app.post("/gcal/export_dates")
 @require_gcal
