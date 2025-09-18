@@ -149,6 +149,62 @@ def _export_all():
     cd = gcal_export_dates().get_json(silent=True) or {}
     return {"today": ct, "dates": cd}
 
+@app.post("/gcal/import_today_to_app")
+@require_gcal
+def gcal_import_today_to_app():
+    import pytz
+    email = session.get("email")
+    if not email: 
+        return jsonify({"error": "not logged in"}), 401
+
+    tz = pytz.timezone("Asia/Kolkata")
+    start_local = tz.localize(datetime.now().replace(hour=0, minute=0, second=0, microsecond=0))
+    end_local   = start_local + timedelta(days=1)
+
+    svc = build_service()
+    resp = svc.events().list(
+        calendarId="primary", singleEvents=True, orderBy="startTime",
+        timeMin=start_local.astimezone(timezone.utc).isoformat(),
+        timeMax=end_local.astimezone(timezone.utc).isoformat(),
+        maxResults=100,
+    ).execute()
+
+    def _fmt_time(dt: datetime) -> str:
+        hh = dt.hour % 12 or 12
+        mm = f"{dt.minute:02d}"
+        ap = "AM" if dt.hour < 12 else "PM"
+        return f"{hh:02d}:{mm} {ap}"
+
+    settings, lines = read_user_blob(email)
+    existing = set(x.strip().lower() for x in lines if x.strip())
+    out_lines = lines[:]
+    added_time, added_date = 0, 0
+
+    for ev in resp.get("items", []):
+        summary = (ev.get("summary") or "").strip()
+        if not summary:
+            continue
+        # skip our own exports
+        if "created-by:scheduledsync" in (ev.get("description") or "").lower():
+            continue
+        start = ev.get("start", {})
+        if "dateTime" in start:
+            dt = datetime.fromisoformat(start["dateTime"].replace("Z", "+00:00")).astimezone(tz)
+            line = f"{_fmt_time(dt)} {summary}"
+        elif "date" in start:
+            d = datetime.fromisoformat(start["date"])
+            line = f"{d.strftime('%b')} {int(d.strftime('%d'))} {summary}"
+        else:
+            continue
+        key = line.strip().lower()
+        if key not in existing:
+            out_lines.append(line); existing.add(key)
+            if "dateTime" in start: added_time += 1
+            else: added_date += 1
+
+    write_user_blob(email, settings, out_lines)
+    return jsonify({"imported_time": added_time, "imported_dates": added_date, "total": added_time + added_date})
+
 COMMANDS = {
     "#import today": lambda: gcal_import_today_to_app(),
     "import today":  lambda: gcal_import_today_to_app(),
