@@ -24,10 +24,14 @@
   <div class="bar">
     {% if email %}
       <form class="inline" method="post" action="/logout"><button>Logout</button></form>
-      <a href="/auth/google"><button>Connect Google</button></a>
-      <form class="inline" method="post" action="/import_google"><button>Import from Google (Today)</button></form>
-      <form class="inline" method="post" action="/export_google"><button>Export to Google (Today)</button></form>
-      <a href="/logout_google"><button>Disconnect Google</button></a>
+      <!-- Connect to Google (starts OAuth) -->
+      <a href="/auth/gcal"><button>Connect Google</button></a>
+      <!-- Import: show next 5 events -->
+      <a href="/gcal/next5"><button>Import from Google (Next 5)</button></a>
+      <!-- Export: not implemented yet -->
+      <button disabled title="Coming soon">Export to Google (Today)</button>
+      <!-- Disconnect: clear session -->
+      <a href="/logout"><button>Disconnect Google</button></a>
     {% endif %}
   </div>
 </header>
