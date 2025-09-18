@@ -1,1 +1,1 @@
-web: gunicorn app:app --chdir . --bind 0.0.0.0:$PORT --timeout 120
+web: gunicorn app:app --chdir . --bind 0.0.0.0:$PORT --timeout 180 -w 2 --threads 2
