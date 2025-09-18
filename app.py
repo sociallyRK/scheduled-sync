@@ -35,6 +35,8 @@ app.config.update(
 )
 
 # ----- Regex helpers ----------------------------------------------------------
+# Dates anywhere like "Meet mom on Sep 21" (month abbrev + day)
+DATE_ANY_RE = re.compile(r"(?:\b(" + "|".join(MONTHS) + r")\.?\s+(\d{1,2})\b)", re.I)
 MONTHS = "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split()
 DATE_PREFIX_RE = re.compile(r"^\s*(?:(" + "|".join(MONTHS) + r")\.?)\s+(\d{1,2})\b", re.I)
 TIME_ANY_RE   = re.compile(r"\b(\d{1,2})(?::(\d{2}))?\s*(AM|PM)\b", re.I)
@@ -113,14 +115,41 @@ def is_travel(line:str)->bool:
 def classify(lines:list[str]):
     schedule, dates, other, travel = [], [], [], []
     for ln in lines:
-        if is_goal(ln): other.append(ln)
-        elif parse_time_tuple(ln): schedule.append(ln)
-        elif parse_date_prefix(ln): (travel if is_travel(ln) else dates).append(ln)
-        else: other.append(ln)
+        if is_goal(ln):
+            other.append(ln)
+            continue
+
+        # Time wins first
+        if parse_time_tuple(ln):
+            schedule.append(ln)
+            continue
+
+        # Date anywhere in the line
+        d_any = parse_date_any(ln)
+        if d_any:
+            # Travel if we detect any location/keyword anywhere in the line
+            (travel if has_location_or_travel_kw(ln) else dates).append(ln)
+        else:
+            other.append(ln)
+
+    # sort using parsed date-any (fallback max)
     schedule.sort(key=lambda x: parse_time_tuple(x) or (99, 99))
-    dates.sort(   key=lambda x: parse_date_prefix(x) or datetime.max)
-    travel.sort(  key=lambda x: parse_date_prefix(x) or datetime.max)
+    dates.sort(   key=lambda x: parse_date_any(x) or datetime.max)
+    travel.sort(  key=lambda x: parse_date_any(x) or datetime.max)
     return schedule, dates, other, travel
+
+def parse_date_any(line:str):
+    m = DATE_ANY_RE.search(line)
+    if not m: return None
+    mon, day = m.group(1), int(m.group(2))
+    try: return _parse_date(f"{mon} {day} {datetime.now().year}")
+    except Exception: return None
+
+def has_location_or_travel_kw(line:str)->bool:
+    geo = GeoText(line)
+    has_city_country = bool(geo.cities or geo.countries) or any(_pycountry_match(tok) for tok in line.split())
+    has_kw = bool(TRAVEL_KEYWORDS.search(line))
+    return has_city_country or has_kw
 
 # ----- Auth routes (login/logout) --------------------------------------------
 @app.post("/login")
