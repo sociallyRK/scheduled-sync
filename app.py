@@ -382,8 +382,48 @@ def gcal_export_today():
     today = tz.localize(datetime.now().replace(hour=0, minute=0, second=0, microsecond=0))
     svc = build_service()
 
+    # de-dupe existing timed events for today
     start_day_utc = today.astimezone(timezone.utc)
     end_day_utc   = (today + timedelta(days=1)).astimezone(timezone.utc)
     existing = set()
     existing_resp = svc.events().list(
-        calendarId="primary
+        calendarId="primary",
+        singleEvents=True, orderBy="startTime",
+        timeMin=start_day_utc.isoformat(), timeMax=end_day_utc.isoformat(),
+        maxResults=250
+    ).execute()
+    for ev in existing_resp.get("items", []):
+        start = ev.get("start", {})
+        if "dateTime" in start:
+            dt = datetime.fromisoformat(start["dateTime"].replace("Z","+00:00")).astimezone(tz)
+            key = (dt.replace(second=0, microsecond=0), (ev.get("summary") or "").strip().lower())
+            existing.add(key)
+
+    def _strip_leading_time(text:str):
+        return re.sub(r"^\s*\d{1,2}(?::\d{2})?\s*(AM|PM)\b", "", text, flags=re.I).strip()
+
+    created = []
+    for raw in schedule:
+        tt = parse_time_tuple(raw)
+        if not tt: 
+            continue
+        h, m = tt
+        summary_text = _strip_leading_time(raw)
+        start_local = today.replace(hour=h, minute=m, second=0, microsecond=0)
+        end_local   = start_local + timedelta(minutes=10)
+        key = (start_local, summary_text.strip().lower())
+        if key in existing:
+            continue
+        ev = {
+            "summary": summary_text,
+            "description": "created-by:ScheduledSync",
+            "start": {"dateTime": start_local.astimezone(timezone.utc).isoformat()},
+            "end":   {"dateTime": end_local.astimezone(timezone.utc).isoformat()},
+        }
+        created.append(svc.events().insert(calendarId="primary", body=ev).execute())
+        existing.add(key)
+
+    if request.args.get("ui") == "1":
+        flash(f"Exported {len(created)} time events to Google (limit {limit}).")
+        return redirect(url_for("index"))
+    return jsonify({"count": len(created), "created": [e.get("htmlLink") for e in created], "limit": limit})
