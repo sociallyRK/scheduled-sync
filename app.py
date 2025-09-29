@@ -1,429 +1,151 @@
-import os, re, json, traceback
-from pathlib import Path
-from datetime import datetime, timezone, timedelta
-from dotenv import load_dotenv
-from flask import Flask, request, render_template, redirect, session, url_for, flash, jsonify
-from geotext import GeoText
-import pycountry
-from werkzeug.middleware.proxy_fix import ProxyFix
-# Google helpers
-from oauth_gcal import begin_auth, finish_auth, require_gcal, build_service, health as gcal_health_check
+import os, json, re, datetime as dt
+from datetime import timezone
+from flask import Flask, redirect, request, session, url_for, render_template, jsonify
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import Flow
+from google.auth.transport.requests import Request
+from googleapiclient.discovery import build
 
-load_dotenv()
+# ===== Config =====
+APP_SECRET = os.environ.get("SECRET_KEY", "dev-secret")
+GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
+GOOGLE_CLIENT_SECRET = os.environ["GOOGLE_CLIENT_SECRET"]
+GOOGLE_REDIRECT_URI = os.environ.get("GOOGLE_REDIRECT_URI", "https://your.app/oauth2callback")
+SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
 
-# ----- Base paths & app setup -------------------------------------------------
-BASE = Path(__file__).parent.resolve()
-DATA_DIR = BASE / "scheduled_data"; DATA_DIR.mkdir(exist_ok=True)
-USERS = BASE / "users.json"
+app = Flask(__name__)
+app.secret_key = APP_SECRET
 
-app = Flask(__name__, template_folder=str(BASE), static_folder=str(BASE))
-app.secret_key = os.environ.get("APP_SECRET_KEY", "dev_secret_change_me")
-app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
-app.config["PREFERRED_URL_SCHEME"] = "https"
-app.config.update(SESSION_COOKIE_SECURE=True, SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax")
+# ===== OAuth Helpers =====
+def _flow():
+    return Flow(
+        client_config={
+            "web": {
+                "client_id": GOOGLE_CLIENT_ID,
+                "project_id": "scheduled",
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+                "client_secret": GOOGLE_CLIENT_SECRET,
+                "redirect_uris": [GOOGLE_REDIRECT_URI],
+                "javascript_origins": []
+            }
+        },
+        scopes=SCOPES,
+        redirect_uri=GOOGLE_REDIRECT_URI,
+    )
 
-# ----- Date parsing -----------------------------------------------------------
-try:
-    from dateparser import parse as _parse_date
-except Exception:
-    from dateutil import parser as _du_parser
-    _parse_date = _du_parser.parse
-
-# ----- Regex helpers ----------------------------------------------------------
-MONTHS = "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split()
-DATE_ANY_RE    = re.compile(r"(?:\b(" + "|".join(MONTHS) + r")\.?\s+(\d{1,2})\b)", re.I)
-DATE_PREFIX_RE = re.compile(r"^\s*(?:(" + "|".join(MONTHS) + r")\.?)\s+(\d{1,2})\b", re.I)
-TIME_ANY_RE    = re.compile(r"\b(\d{1,2})(?::(\d{2}))?\s*(AM|PM)\b", re.I)
-TIME_START_RE  = re.compile(r"^\s*(\d{1,2})(?::(\d{2}))?\s*(AM|PM)\b", re.I)
-GOAL_RE        = re.compile(r"^\s*(Goal:|To\s)\b", re.I)
-TRAVEL_KEYWORDS= re.compile(r"\b(flight|fly|arrive|depart|airport|train|hotel|check-?in|to)\b", re.I)
-TIME_LEADING_RE= re.compile(r"^\s*\d{1,2}(?::\d{2})?\s*(AM|PM)\b", re.I)
-
-# ----- File helpers -----------------------------------------------------------
-def _safe(email:str)->str: return re.sub(r"[^a-z0-9_.@+-]+","_",email.lower())
-def user_file(email:str)->Path: return DATA_DIR / f"{_safe(email)}.txt"
-def _default_settings(): return {"travel_enabled": False, "time_format": "12h"}
-def load_users(): return json.loads(USERS.read_text()) if USERS.exists() else {}
-def save_users(d): USERS.write_text(json.dumps(d, indent=2))
-
-def read_user_blob(email:str):
-    p = user_file(email)
-    if not p.exists():
-        p.write_text(f"SETTINGS:{json.dumps(_default_settings())}\n", encoding="utf-8")
-    raw = p.read_text(encoding="utf-8").splitlines()
-    if raw and raw[0].startswith("SETTINGS:"):
+def _get_creds():
+    tok = session.get("token")
+    if not tok: return None
+    creds = Credentials.from_authorized_user_info(tok, SCOPES)
+    if creds and creds.expired and creds.refresh_token:
         try:
-            settings = json.loads(raw[0][9:])
+            creds.refresh(Request())
+            session["token"] = json.loads(creds.to_json())
         except Exception:
-            settings = _default_settings(); raw[0] = f"SETTINGS:{json.dumps(settings)}"
-    else:
-        settings = _default_settings(); raw.insert(0, f"SETTINGS:{json.dumps(settings)}")
-    lines = [ln for ln in raw[1:] if ln.strip()]
-    return settings, lines
+            session.pop("token", None)
+            return None
+    return creds
 
-def write_user_blob(email:str, settings:dict, lines:list[str]):
-    p = user_file(email)
-    header = f"SETTINGS:{json.dumps(settings)}\n"
-    body = "\n".join([ln.strip() for ln in lines if ln.strip()])
-    p.write_text(header + (body + "\n" if body else ""), encoding="utf-8")
+# ===== Utility =====
+def now_utc_iso(): return dt.datetime.now(timezone.utc).isoformat()
+def in_days_iso(days): return (dt.datetime.now(timezone.utc)+dt.timedelta(days=days)).isoformat()
 
-def append_line(email:str, text:str):
-    settings, lines = read_user_blob(email); lines.append(text.strip())
-    write_user_blob(email, settings, lines)
+# Simple regexes to pull travel data
+AIRLINE_HINTS = r"(UA|United|AA|American|DL|Delta|BA|British|LH|Lufthansa|AI|Air India|Vistara|IndiGo)"
+CITY_RX = r"(New York|Los Angeles|San Francisco|Mumbai|Delhi|Bengaluru|Chicago|Miami|London|Paris|Dubai)"
 
-def reset_user(email:str): write_user_blob(email, _default_settings(), [])
+def parse_trips(events):
+    trips = []
+    for ev in events:
+        title = (ev.get("summary") or "") + " " + (ev.get("location") or "")
+        if re.search(AIRLINE_HINTS, title, re.I) or "Flight" in title:
+            trips.append({
+                "type": "flight",
+                "title": ev.get("summary"),
+                "start": ev.get("start"),
+                "end": ev.get("end"),
+                "city": _first_or_none(re.findall(CITY_RX, title, re.I)),
+            })
+        elif "Hotel" in title:
+            trips.append({
+                "type": "hotel",
+                "title": ev.get("summary"),
+                "start": ev.get("start"),
+                "end": ev.get("end"),
+                "city": _first_or_none(re.findall(CITY_RX, title, re.I)),
+            })
+    return trips
 
-# ----- Parse helpers ----------------------------------------------------------
-def parse_time_tuple(line:str):
-    m = TIME_START_RE.match(line) or TIME_ANY_RE.search(line)
-    if not m: return None
-    h = int(m.group(1)); minute = int(m.group(2) or 0); ampm = m.group(3).upper()
-    h = 0 if h == 12 else h
-    if ampm == "PM": h += 12
-    return (h, minute)
+def _first_or_none(seq): return seq[0] if seq else None
 
-def parse_date_prefix(line:str):
-    m = DATE_PREFIX_RE.match(line)
-    if not m: return None
-    mon, day = m.group(1), int(m.group(2))
-    try: return _parse_date(f"{mon} {day} {datetime.now().year}")
-    except Exception: return None
-
-def is_goal(line:str)->bool: return bool(GOAL_RE.match(line))
-
-def _pycountry_match(word:str)->bool:
-    w = word.upper().strip(".,;:!?")
-    alias = {"US":"UNITED STATES","USA":"UNITED STATES","UAE":"UNITED ARAB EMIRATES","UK":"UNITED KINGDOM"}
-    if w in alias: w = alias[w]
-    try: return pycountry.countries.lookup(w) is not None
-    except LookupError: return False
-
-def has_location_or_travel_kw(line:str)->bool:
-    geo = GeoText(line)
-    has_city_country = bool(geo.cities or geo.countries) or any(_pycountry_match(tok) for tok in line.split())
-    has_kw = bool(TRAVEL_KEYWORDS.search(line))
-    return has_city_country or has_kw
-
-def parse_date_any(line:str):
-    m = DATE_ANY_RE.search(line)
-    if not m: return None
-    mon, day = m.group(1), int(m.group(2))
-    try: return _parse_date(f"{mon} {day} {datetime.now().year}")
-    except Exception: return None
-
-def classify(lines:list[str]):
-    schedule, dates, other, travel = [], [], [], []
-    for ln in lines:
-        if is_goal(ln): other.append(ln); continue
-        if parse_time_tuple(ln): schedule.append(ln); continue
-        d_any = parse_date_any(ln)
-        if d_any:
-            (travel if has_location_or_travel_kw(ln) else dates).append(ln)
-        else:
-            other.append(ln)
-    schedule.sort(key=lambda x: parse_time_tuple(x) or (99, 99))
-    dates.sort(   key=lambda x: parse_date_any(x) or datetime.max)
-    travel.sort(  key=lambda x: parse_date_any(x) or datetime.max)
-    return schedule, dates, other, travel
-
-def _strip_leading_time(text:str)->str:
-    return TIME_LEADING_RE.sub("", text, count=1).strip()
-
-# ----- GCAL Import (paged) ----------------------------------------------------
-@app.post("/gcal/import_today_to_app")
-@require_gcal
-def gcal_import_today_to_app():
-    import pytz
-    email = session.get("email")
-    if not email: return jsonify({"error": "not logged in"}), 401
-
-    limit = max(1, min(int(request.args.get("limit", 60)), 500))
-    page_token = request.args.get("pageToken")
-
-    tz = pytz.timezone("Asia/Kolkata")
-    start_local = tz.localize(datetime.now().replace(hour=0, minute=0, second=0, microsecond=0))
-    end_local   = start_local + timedelta(days=1)
-
-    svc = build_service()
-    req = svc.events().list(
-        calendarId="primary",
-        singleEvents=True, orderBy="startTime",
-        timeMin=start_local.astimezone(timezone.utc).isoformat(),
-        timeMax=end_local.astimezone(timezone.utc).isoformat(),
-        maxResults=min(limit, 200),
-        pageToken=page_token,
-        fields="items(start,summary,description),nextPageToken"
-    )
-    resp = req.execute()
-
-    def _fmt_time(dt: datetime) -> str:
-        hh = dt.hour % 12 or 12
-        mm = f"{dt.minute:02d}"
-        ap = "AM" if dt.hour < 12 else "PM"
-        return f"{hh:02d}:{mm} {ap}"
-
-    settings, lines = read_user_blob(email)
-    existing = set(x.strip().lower() for x in lines if x.strip())
-    out_lines = lines[:]
-    added_time = added_date = 0
-    consumed = 0
-
-    for ev in resp.get("items", []):
-        if consumed >= limit: break
-        summary = (ev.get("summary") or "").strip()
-        if not summary: continue
-        if "created-by:scheduledsync" in (ev.get("description") or "").lower():
-            continue
-        start = ev.get("start", {})
-        if "dateTime" in start:
-            dt = datetime.fromisoformat(start["dateTime"].replace("Z", "+00:00")).astimezone(tz)
-            line = summary if TIME_LEADING_RE.match(summary) else f"{_fmt_time(dt)} {summary}"
-            key = line.lower()
-            if key not in existing:
-                out_lines.append(line); existing.add(key); added_time += 1
-        elif "date" in start:
-            d = datetime.fromisoformat(start["date"])
-            line = f"{d.strftime('%b')} {int(d.strftime('%d'))} {summary}"
-            key = line.lower()
-            if key not in existing:
-                out_lines.append(line); existing.add(key); added_date += 1
-        else:
-            continue
-        consumed += 1
-
-    if consumed:
-        write_user_blob(email, settings, out_lines)
-
-    return jsonify({
-        "imported_time": added_time,
-        "imported_dates": added_date,
-        "total": added_time + added_date,
-        "nextPageToken": resp.get("nextPageToken"),
-        "limit": limit
-    })
-
-# ----- Auth routes (login/logout) --------------------------------------------
-@app.post("/login")
-def login():
-    email = request.form.get("email","").strip().lower()
-    password = request.form.get("password","").strip()
-    if not email or not password:
-        flash("Email and password required."); return redirect(url_for("index"))
-    users = load_users()
-    if email in users and users[email].get("password") != password:
-        flash("Incorrect password."); return redirect(url_for("index"))
-    users[email] = {"password": password}
-    save_users(users); session["email"] = email; flash("Logged in.")
-    return redirect(url_for("index"))
-
-@app.post("/logout")
-def logout():
-    session.clear(); flash("Logged out."); return redirect(url_for("index"))
-
-# ----- Commands ---------------------------------------------------------------
-def _export_all():
-    ct = gcal_export_today().get_json(silent=True) or {}
-    cd = gcal_export_dates().get_json(silent=True) or {}
-    return {"today": ct, "dates": cd}
-
-COMMANDS = {
-    "#import today": lambda: gcal_import_today_to_app(),
-    "import today":  lambda: gcal_import_today_to_app(),
-    "#export today": lambda: gcal_export_today(),
-    "export today":  lambda: gcal_export_today(),
-    "#export dates": lambda: gcal_export_dates(),
-    "export dates":  lambda: gcal_export_dates(),
-    "#export all":   _export_all,
-    "export all":    _export_all,
-}
-
-# ----- Probes ----------------------------------------------------------------
-@app.get("/health")
-def app_health(): return {"ok": True}
-
-@app.get("/version")
-def version(): return {"commit": os.getenv("RENDER_GIT_COMMIT", "local")}
-
-@app.get("/time")
-def time_now(): return {"server_time": datetime.now(timezone.utc).isoformat()}
-
-@app.get("/status")
-def status(): return "up", 200
-
-@app.get("/healthz")
-def healthz(): return "ok", 200
-
-@app.get("/debug")
-def debug():
-    return {"email": session.get("email"),
-            "files": [p.name for p in DATA_DIR.glob("*.txt")],
-            "users_file": USERS.exists()}
-
-@app.get("/__routes")
-def __routes():
-    return {"routes":[str(r) for r in app.url_map.iter_rules()]}
-
-# ----- UI --------------------------------------------------------------------
-@app.get("/")
-def index():
-    email = session.get("email")
-    schedule = dates = other = travel = []
-    travel_enabled = False
-    now_ist = datetime.now().strftime("%Y-%m-%d %H:%M")
-    if email:
-        settings, lines = read_user_blob(email)
-        travel_enabled = settings.get("travel_enabled", False)
-        schedule, dates, other, travel = classify(lines)
-    return render_template("index.html",
-        email=email, schedule=schedule, dates=dates, other=other, travel=travel,
-        travel_enabled=travel_enabled, now_ist=now_ist, session_has_gcal=bool(session.get("gcal"))
-    )
-
-@app.post("/toggle_travel")
-def toggle_travel():
-    email = session.get("email")
-    if not email: flash("Login required."); return redirect(url_for("index"))
-    settings, lines = read_user_blob(email)
-    settings["travel_enabled"] = not settings.get("travel_enabled", False)
-    write_user_blob(email, settings, lines)
-    return redirect(url_for("index"))
-
-@app.post("/add")
-def add():
-    email = session.get("email")
-    if not email:
-        flash("Login required."); return redirect(url_for("index"))
-    text = request.form.get("add","").strip(); t = text.lower()
-    if t in COMMANDS:
-        resp = COMMANDS[t]()
-        if isinstance(resp, dict):
-            ct, cd = resp.get("today", {}), resp.get("dates", {})
-            flash(f"Exported {int(ct.get('count',0))} time + {int(cd.get('count',0))} date events.")
-        else:
-            data = resp.get_json(silent=True) or {}
-            if "total" in data: flash(f"Imported {int(data.get('total',0))} items from Google.")
-            elif "count" in data: flash(f"Exported {int(data.get('count',0))} items to Google.")
-        return redirect(url_for("index"))
-    if text: append_line(email, text)
-    return redirect(url_for("index"))
-
-@app.post("/reset")
-def reset():
-    email = session.get("email")
-    if not email: flash("Login required."); return redirect(url_for("index"))
-    reset_user(email); flash("Data reset."); return redirect(url_for("index"))
-
-# ----- Google Calendar --------------------------------------------------------
-@app.get("/auth/gcal")
-def gcal_auth(): return redirect(begin_auth(request.args.get("next", "/")))
-
-@app.get("/gcal/callback")
-def gcal_callback():
+# ===== Routes =====
+@app.route("/")
+def home():
+    creds = _get_creds()
+    if not creds:
+        return render_template("index.html", signed_in=False, events=[], error=None)
     try:
-        nxt = finish_auth(request.url)
-        return redirect(nxt or url_for("index"))
-    except Exception as e:
-        tb = traceback.format_exc()
-        return f"GCAL CALLBACK ERROR\n{type(e).__name__}: {e}\n\n{tb}", 500
+        service = build("calendar", "v3", credentials=creds, cache_discovery=False)
+        resp = service.events().list(
+            calendarId="primary",
+            singleEvents=True,
+            orderBy="startTime",
+            timeMin=now_utc_iso(),
+            timeMax=in_days_iso(14),
+            maxResults=50
+        ).execute()
+        items = []
+        for ev in resp.get("items", []):
+            s = ev.get("start", {}); e = ev.get("end", {})
+            items.append({
+                "summary": ev.get("summary", "(No title)"),
+                "location": ev.get("location"),
+                "start": s.get("dateTime") or (s.get("date")+"T00:00:00" if s.get("date") else None),
+                "end": e.get("dateTime") or (e.get("date")+"T00:00:00" if e.get("date") else None),
+                "status": ev.get("status"),
+                "htmlLink": ev.get("htmlLink"),
+            })
+        session["last_events"] = items
+        session["last_trips"] = parse_trips(items)
+        return render_template("index.html", signed_in=True, events=items, error=None)
+    except Exception as ex:
+        session["last_error"] = str(ex)
+        return render_template("index.html", signed_in=True, events=[], error="Couldn’t load Google Calendar."), 500
 
-@app.get("/health/gcal")
-def health_gcal(): return gcal_health_check()
+@app.route("/api/events")
+def api_events():
+    try:
+        return jsonify({"ok": True, "items": session.get("last_events", [])})
+    except Exception as ex:
+        return jsonify({"ok": False, "error": str(ex)}), 500
 
-@app.get("/gcal/next5")
-@require_gcal
-def gcal_next5():
-    svc = build_service()
-    events = svc.events().list(calendarId="primary", singleEvents=True,
-                               orderBy="startTime", maxResults=5).execute()
-    return jsonify(events)
+@app.route("/api/travel")
+def api_travel():
+    try:
+        return jsonify({"ok": True, "trips": session.get("last_trips", [])})
+    except Exception as ex:
+        return jsonify({"ok": False, "error": str(ex)}), 500
 
-@app.get("/gcal/today")
-@require_gcal
-def gcal_today():
-    import pytz
-    svc = build_service()
-    tz = pytz.timezone("Asia/Kolkata")
-    start = tz.localize(datetime.now().replace(hour=0, minute=0, second=0, microsecond=0))
-    end   = start + timedelta(days=1)
-    events = svc.events().list(
-        calendarId="primary", singleEvents=True, orderBy="startTime",
-        timeMin=start.astimezone(timezone.utc).isoformat(),
-        timeMax=end.astimezone(timezone.utc).isoformat(), maxResults=50
-    ).execute()
-    return jsonify(events)
+@app.route("/login")
+def login():
+    flow = _flow()
+    auth_url, state = flow.authorization_url(include_granted_scopes="true", access_type="offline", prompt="consent")
+    session["state"] = state
+    return redirect(auth_url)
 
-@app.post("/gcal/add_demo")
-@require_gcal
-def gcal_add_demo():
-    svc = build_service()
-    now = datetime.now(timezone.utc) + timedelta(minutes=10)
-    event = {
-        "summary": "Scheduled Sync Demo Event",
-        "description": "created-by:ScheduledSync",
-        "start": {"dateTime": now.isoformat()},
-        "end": {"dateTime": (now + timedelta(minutes=30)).isoformat()},
-    }
-    created = svc.events().insert(calendarId="primary", body=event).execute()
-    return jsonify({"created": created.get("htmlLink")})
+@app.route("/oauth2callback")
+def oauth2callback():
+    flow = _flow()
+    flow.fetch_token(authorization_response=request.url)
+    creds = flow.credentials
+    session["token"] = json.loads(creds.to_json())
+    return redirect(url_for("home"))
 
-@app.post("/gcal/export_today")
-@require_gcal
-def gcal_export_today():
-    import pytz
-    email = session.get("email")
-    if not email: return jsonify({"error":"not logged in"}), 401
-    limit = min(int(request.args.get("limit", 20)), 200)
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect(url_for("home"))
 
-    settings, lines = read_user_blob(email)
-    schedule, _, _, _ = classify(lines)
-    schedule = schedule[:limit]
-
-    tz = pytz.timezone("Asia/Kolkata")
-    today = tz.localize(datetime.now().replace(hour=0, minute=0, second=0, microsecond=0))
-    svc = build_service()
-
-    # de-dupe existing timed events for today
-    start_day_utc = today.astimezone(timezone.utc)
-    end_day_utc   = (today + timedelta(days=1)).astimezone(timezone.utc)
-    existing = set()
-    existing_resp = svc.events().list(
-        calendarId="primary",
-        singleEvents=True, orderBy="startTime",
-        timeMin=start_day_utc.isoformat(), timeMax=end_day_utc.isoformat(),
-        maxResults=250
-    ).execute()
-    for ev in existing_resp.get("items", []):
-        start = ev.get("start", {})
-        if "dateTime" in start:
-            dt = datetime.fromisoformat(start["dateTime"].replace("Z","+00:00")).astimezone(tz)
-            key = (dt.replace(second=0, microsecond=0), (ev.get("summary") or "").strip().lower())
-            existing.add(key)
-
-    def _strip_leading_time(text:str):
-        return re.sub(r"^\s*\d{1,2}(?::\d{2})?\s*(AM|PM)\b", "", text, flags=re.I).strip()
-
-    created = []
-    for raw in schedule:
-        tt = parse_time_tuple(raw)
-        if not tt: 
-            continue
-        h, m = tt
-        summary_text = _strip_leading_time(raw)
-        start_local = today.replace(hour=h, minute=m, second=0, microsecond=0)
-        end_local   = start_local + timedelta(minutes=10)
-        key = (start_local, summary_text.strip().lower())
-        if key in existing:
-            continue
-        ev = {
-            "summary": summary_text,
-            "description": "created-by:ScheduledSync",
-            "start": {"dateTime": start_local.astimezone(timezone.utc).isoformat()},
-            "end":   {"dateTime": end_local.astimezone(timezone.utc).isoformat()},
-        }
-        created.append(svc.events().insert(calendarId="primary", body=ev).execute())
-        existing.add(key)
-
-    if request.args.get("ui") == "1":
-        flash(f"Exported {len(created)} time events to Google (limit {limit}).")
-        return redirect(url_for("index"))
-    return jsonify({"count": len(created), "created": [e.get("htmlLink") for e in created], "limit": limit})
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)

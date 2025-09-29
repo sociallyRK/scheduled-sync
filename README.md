@@ -65,14 +65,3 @@ Disable `/debug`, `/_envz`, `/__routes` in production. Keep secrets (`APP_SECRET
 
 ### Procfile
 
-### render.yaml
-```yaml
-services:
-- type: web
-  name: scheduled-staging
-  runtime: python
-  repo: https://github.com/sociallyRK/scheduled-sync
-  buildCommand: pip install -r requirements.txt
-  startCommand: gunicorn app:app --chdir . --bind 0.0.0.0:$PORT --timeout 120
-  autoDeployTrigger: on
-  plan: pro plus
